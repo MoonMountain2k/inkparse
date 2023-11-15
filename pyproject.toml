@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "inksac"
+version = "0.0.1"
+authors = [
+	{ name="Saruultugs Unentugs", email="moonmountain2k@gmail.com" },
+]
+description = "Functions and classes for simpler text parsing. Has a syntax centered around the \"with\" statement."
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+]
+
+[project.urls]
+"Homepage" = "https://github.com/MoonMountain2k/inkparse"
+"Bug Tracker" = "https://github.com/MoonMountain2k/inkparse/issues"
