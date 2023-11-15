@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "inksac"
+name = "inkparse"
 version = "0.0.1"
 authors = [
 	{ name="Saruultugs Unentugs", email="moonmountain2k@gmail.com" },
