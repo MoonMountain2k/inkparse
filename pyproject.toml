@@ -23,3 +23,8 @@ dependencies = [
 [project.urls]
 "Homepage" = "https://github.com/MoonMountain2k/inkparse"
 "Bug Tracker" = "https://github.com/MoonMountain2k/inkparse/issues"
+
+[tool.hatch.build.targets.sdist]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inkparse"]
