@@ -1,0 +1,22 @@
+name: Publish release to PyPI
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-to-pypi:
+    name: Publish release to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/inkparse
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+    steps:
+      - name: Get release
+        uses: robinraju/release-downloader@v1.8
+        with:
+          tag: ${{ github.action.release.tag_name }}
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
