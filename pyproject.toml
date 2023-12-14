@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "inkparse"
-version = "0.0.1"
+version = "0.1.0"
 authors = [
-	{ name="Saruultugs Unentugs", email="moonmountain2k@gmail.com" },
+	{ name="MoonMountain2k", email="moonmountain2k@gmail.com" },
 ]
 description = "Functions and classes for simpler text parsing. Has a syntax centered around the \"with\" statement."
 readme = "README.md"
