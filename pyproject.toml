@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "inkparse"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
 	{ name="MoonMountain2k", email="moonmountain2k@gmail.com" },
 ]
-description = "Functions and classes for simpler text parsing. Has a syntax centered around the \"with\" statement."
+description = "Functions and classes for simpler text parsing. Not designed to be fast. Has a syntax centered around the \"with\" statement."
 readme = "README.md"
 requires-python = ">=3.7"
 classifiers = [
