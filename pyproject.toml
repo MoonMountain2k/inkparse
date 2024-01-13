@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "inkparse"
-version = "0.2.0"
+version = "0.3.0"
 authors = [
 	{ name="MoonMountain2k", email="moonmountain2k@gmail.com" },
 ]
