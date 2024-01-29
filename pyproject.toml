@@ -8,9 +8,9 @@ version = "0.3.0"
 authors = [
 	{ name="MoonMountain2k", email="moonmountain2k@gmail.com" },
 ]
-description = "Functions and classes for simpler text parsing. Not designed to be fast. Has a syntax centered around the \"with\" statement."
+description = "Functions and classes for simpler text parsing."
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
