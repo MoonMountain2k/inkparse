@@ -41,18 +41,16 @@ Any non special characters are matched literally. (when `literal_only` is turned
 	- `\b`: Any line break sequence
 		- `\n` or `\r\n`
 		- Not a single character, so it can't be used in sets.
+		- If inverted, only matches a single character.
 	- `\v`: Vertical whitespace
 	- `\h`: Horizontal whitespace
 	- Inverted version.
-		- `\!w`: Non word character
-	- Uppercase version.
-		- `\^a`: Uppercase letters
-	- Lowercase version.
-		- `\_a`: Lowercase letters
-	- Case insensitive version.
-		- `\?a`
-		- Useless, since all escapes are case insensitive by default
-		- Only implemented for symmetry
+		- Capitalize the character.
+		- `\W`: Non word character
+	- Uppercase only version.
+		- `\ua`: Uppercase letters
+	- Lowercase only version.
+		- `\la`: Lowercase letters
 
 ## Character sets
 
@@ -65,11 +63,12 @@ Any non special characters are matched literally. (when `literal_only` is turned
 		- Can include other sets:
 			- `{abc{0-9}}` `{abc{.ws}}`
 			- Invalid: `{abc0-9}` `{abc.ws}`
+				- ("0", "-", or "9" will be matched, instead of digits, etc.)
 	- `{a-z}`: Range
 		- Any character in the range
 	- `{.ws}`: Character class
 		- Any character in the class
-	- `{?abc}`: Case insensitive
+	- `{?abc}`: Case insensitive version
 	- `{^abc}`: Uppercase version
 	- `{_abc}`: Lowercase version
 	- `{!abc}`: Inverted
@@ -127,23 +126,42 @@ Any non special characters are matched literally. (when `literal_only` is turned
 - `(!>;abc)`: Negative lookahead.
 	- Equivalent to: `[abc]->($!)`
 - `(!<;abc)`: Negative lookbehind.
-	- Equivalent to: `[$(^..0)(abc)]->($!)`
+	- Equivalent to: `[$(^..0)(abc)$(==:g)]->($!)`
 - `(foo;abc)`: Capture group
-- `(t:foo;abc)`: Trigger group
-	- Not a real group, can't be combined with other types.
+- `($bar;abc)`: Global capture
+- `(::$foo;abc)`: Definition
+	- Does not match, only defines the group for later use.
+- `(->$foo)`: Match another group
+	- `(->$foo)`: Runs a named group.
+	- `(->$g)`: Recurses group.
+	- `(->$e)`: Recurses expression.
+	- `(->.foo)`: Matches the contents of a capture.
+	- `(->.foo[1..2])`: Matches a section of the contents of a capture.
 
 You can combine group types.
 
-- `(?foo;abc)`: Case insensitive, capture as "foo".
-- `[>foo;abc]`: Optional lookahead, capture as "foo".
+- `(?foo;abc)`: Case insensitive, capture as `.foo`.
+- `[>foo;abc]`: Optional lookahead, capture as `.foo`.
+- `(foo->$bar)`: Run group `bar` and capture it as `.foo`.
 
 ## One of
 
 - `(a|b|c)`: One of
-	- Gets the items to the edge of the group it's in.
 - `[a|b|c]`: Optional one of
-- `(a|b|!c)`: Possessive one of
-	- If a or b matches, c isn't attempted when backtracking.
+- Possessive:
+	- `(a|b|c)!`: Possessive
+		- If any of them match, none of the rest are tried
+	- `[a|b|c]!`: Possessive optional
+		- If any of them match, none of the rest are tried, and skipping isn't attempted
+	- `(a|b||c|d)`: Partly possessive
+		- If `a` or `b` matches, `c` or `d` isn't attempted when backtracking.
+	- `(a|b>!|c|d)`: Partly possessive
+		- Uses the `>!` operator to emulate possessiveness.
+		- If `b` matches, the others aren't attempted when backtracking. Only `b` is affected.
+	- Possessive loops don't affect the one of's possessiveness.
+	- Use two exclamation marks:
+		- `(a|b|c)!+!`: Possesive one of in a possessive loop.
+		- `[a|b|c]!+!`: Possesive optional one of in a zero or more possessive loop.
 
 ## Loops
 
@@ -151,6 +169,7 @@ You can combine group types.
 	- Groups
 	- Chararter sets
 	- Escape sequences
+- Loops are a part of the group.
 - Greedy loops: (tries to get as many as possible)
 	- `[abc]+`: Zero or more
 	- `(abc)+`: One or more
@@ -172,9 +191,8 @@ You can combine group types.
 	- `(abc)*10+`: 10 or more times (greedy)
 	- `(abc)*10+?`: 10 or more times (lazy)
 	- `(abc)*10+!`: 10 or more times (possessive)
-	- `(abc)*(10..eof)`: 10 or more times (lazy)
-	- `(abc)*(eof..10)`: 10 or more times (greedy)
-		- You can use `end` instead of `eof`
+	- `(abc)*(10..inf)`: 10 or more times (lazy)
+	- `(abc)*(inf..10)`: 10 or more times (greedy)
 	- `(abc)*(5..10)`: 5 to 10 times (inclusive) (lazy)
 	- `(abc)*(10..5)`: 5 to 10 times (inclusive) (greedy)
 	- `(abc)*(2..4, 6..8)`: Order: 2, 3, 4, 6, 7, 8
@@ -194,63 +212,87 @@ You can combine group types.
 		- If 2 is found, 3 and 4 will never be tried. (which is the behavior of `*2`)
 		- And it can't match 3 or 4 times without matching twice before it.
 - Breaking out of loops:
-	- Use the break operation `$b`.
-	- `(abc$b)+`
-	- More useful when combined with conditions:
-		- `(abc[d]->($b))+`
-			- Matches "abc" repeatedly, but if it finds "d", break.
-			- Same as: `(abc)+?d`
-- Accepting a loop will result in behavior similar to a `continue` statement:
+	- Use the accept operation `$a`.
 	- `(abc$a)+`
-- If you need to break out of a nested loop, capture it and accept it.
-	- `(1:((abc$<a:1>)+)+)`
-- If you loop a capturing group, the contents get captured as `foo.0` to `foo.N`.
+	- `(1;(abc$<a 1>)+)+`
+- Continue statements:
+	- Use the next operation `$n`.
+	- `(abc$n)+`
+	- `(1;(abc$<n 1>)+)+`
+- If you loop a capturing group, the contents get captured as sub captures.
+	- Example: `(foo;abc)+`
+	- `foo.0` to `foo.N` - the 0th to the Nth iteration.
+	- `foo.prev` - the previous iteration's capture.
+	- `foo.prev2`, etc.
 
 
 ## Operations
 
 - Accept:
 	- `$a`: Stops parsing this group with a success
-		- Same as `${g:}`
+		- Same as `${(.>)}`
 	- `$A`: Stops parsing the expression with a success
-		- Same as `${e:}`
-	- `$<a:foo>`: Accept specific group
-		- Same as `${foo:}`
+		- Same as `${(~>)}`
+	- `$<a foo>`: Accept specific group
+		- Same as `${(foo>)}`
 - Fail:
 	- `$!`: Fail
 		- Just a normal mismatch, will backtrack as normal after this.
 	- `$f`: Fail group
-		- Starts backtracking from the group's start.
-		- Must be inside the group.
 	- `$F`: Fail expression
-	- `$<f:foo>`: Fail specific group
-- Fail on backtrack:
-	- `>>`: Skip the part of the group before this operation when backtracking.
-	- `$p`: Fail group if backtracking is attempted here.
-		- This will fail optional groups, unlike `>>`.
-	- `$P`: Fail expression if backtracking is attempted here.
-	- `$<p:foo>`: Fail specific group if backtracking is attempted here.
+	- `$<f foo>`: Fail specific group
 		- Must be inside the group.
-- Break:
-	- `$b`: Stops looping the innermost loop with a success
-	- Use the accept operation if you want to break out of nested loops:
-		- `(1:((abc$<a:1>)**)**)`
+- Next / continue:
+	- `$n`: Next
+		- Goes to the next iteration, or the next section of an "one of" statement.
+		- Basically fails the current iteration of the loop.
+	- `$<n foo>`
+- Prevent backtracking:
+	- Triggered when this symbol is reached while backtracking.
+	- `>>`: Skip until the start of the group.
+	- `>!` or `$p`: Skip the group and it's branches.
+		- This will fully skip optional groups, one-ofs, and loops, unlike `>>`.
+	- `$P`: Fail expression if backtracking is attempted here.
+	- `$<!foo>` `$<p foo>`: Fail specific group if backtracking is attempted here.
+		- Must be inside the group.
 - Skip:
-	- `$<s:foo>`: Won't match the group.
-	- Must be before the group.
-- Skip backtracking:
-	- `$<sb:foo>`: Won't re-try the group when backtracking.
-	- (Basically makes the group atomic.)
-	- Must be after or inside the group.
-	- Effect stops when the backtracking goes beyond the mentioned group.
+	- `$<s foo>`: Will skip the group the following times it's attempted.
+	- `$<sf foo>`: Will fail the group the following times it's attempted.
+- Restart:
+	- `$r`: Restarts the whole expression starting at the current cursor position.
+	- Restarts all captures and saved data.
+	- If a position is attemped twice, fails the expression.
+- Ignore / intercept:
+	- `$i`: Catches the error in conditional failure clauses.
 
-### Built in group names
+## Capture paths and group names
 
-- `e`: The whole expression.
-- `g`: The inner-most group.
-- `g0`: The inner-most group.
-- `g1`: One group above the inner-most group.
-- `gN`: N groups above the inner-most group.
+When capturing:
+
+- `foo`: `.foo`.
+- `~foo`: A sub capture of the expression.
+- `.foo`: A sub capture of the current group.
+- `..foo`: A sub capture of the parent group / a sibling capture.
+- etc.
+- `.foo.bar`
+- `..foo.bar`
+- `~foo.bar`
+
+When using:
+
+- `foo`: Any parent capture named `foo`.
+	- The first one found when traversing up the tree.
+- `~`: The capture of the expression.
+- `.`: The capture of the current group.
+- `..`: The capture of the parent group.
+- `...`: The capture of the parent's parent group.
+- etc.
+- `~foo`: A sub capture of the expression.
+- `.foo`: A sub capture of the current group.
+- `..foo`: A sub capture of the parent group / a sibling capture.
+- `.foo.bar`
+- `..foo.bar`
+- `~foo.bar`
 
 ## Move operations
 
@@ -269,32 +311,32 @@ You can combine group types.
 	- `foo+1`: One position after the position.
 	- `foo-1`: One position before the position.
 - Relative to captured match:
-	- `:e`: The beginning of this match.
-	- `:g`: The beginning of this group.
-	- `:foo`: The beginning of a captured match.
-	- `foo:`: The end of a captured match.
-	- `:foo+1`: One position after the beginning of the captured match.
+	- `~`: The beginning of the expression.
+	- `.`: The beginning of this group.
+	- `foo`: The beginning of a captured match.
+	- `foo'`: The end of a captured match.
+	- `foo+1`: One position after the beginning of the captured match.
 - `$(+1, +3)`: Multiple destinations. If a position fails, it tries the next one.
 - `$(+1..+4)`: Range. If a position fails, it tries the next one.
 
-## Set operations
+## Save operations
 
-- `${foo}`: Save the cursor position as foo.
-- `${:foo}`: Set the start of a captured group.
-- `${foo:}`: Set the end of a captured group.
+- `${@foo}`: Save the cursor position as foo.
+- `${foo}`: Set the start of a captured group.
+- `${foo'}`: Set the end of a captured group.
 	- Ends parsing the group with a success if the group wasn't finished yet.
-- `${:e}`: Set the start of this match.
-- `${e:}`: Set the end of this match.
+- `${~}`: Set the start of this match.
+- `${~'}`: Set the end of this match.
 	- Ends parsing with a success.
-- `${:g}`: Set the start of this group.
-- `${g:}`: Set the end of this group.
+- `${.}`: Set the start of this group.
+- `${.'}`: Set the end of this group.
 	- Ends parsing the group with a success if the group wasn't finished yet.
-- `${foo=1}`: Assign any position to a variable.
+- `${@foo=1}`: Assign any position to a variable.
 	- Works with variables and captured matches:
-		- `${foo=bar}`
-		- `${foo=:bar}` `${foo=bar:}`
+		- `${@foo=@bar}`
+		- `${@foo=bar}` `${@foo=bar'}`
 	- Works with operations:
-		- `${foo=1+2}`.
+		- `${@foo=1+2}`.
 	- The allowed operations are:
 		- `(a)`: Parentheses
 		- `a+b`: Addition
@@ -303,50 +345,19 @@ You can combine group types.
 		- `a/b`: Division (integer)
 		- `a%b`: Modulo
 	- Works with relative positions:
-		- `${foo=^}`: The position of the cursor.
-		- `${foo=-1}`: One position before the cursor.
-		- `${foo=+1}`: One position after the cursor.
+		- `${@foo=^}`: The position of the cursor.
+		- `${@foo=-1}`: One position before the cursor.
+		- `${@foo=+1}`: One position after the cursor.
 		- While there is no ambiguity, I'd recommend using parentheses when combining with other operations.
-			- `${foo=bar+(+1)}`
-		- Or you can use the position of the cursor.
-			- `${foo=bar+(^+1)}`
-- `${foo+=1}`: Modify a variable.
+			- `${@foo=bar+(+1)}`
+- `${@foo+=1}`: Modify a variable.
 	- The allowed operations are:
 		- `+=`: Increase
 		- `-=`: Decrease
 		- `*=`: Multiply
 		- `/=`: Divide (integer)
 		- `%=`: Modulo
-- `${foo=1;bar=2}`: Multiple operations.
-
-## Compare operations
-
-- `$(==1)`: Test if the cursor position is equal to 1.
-	- Works with other operations:
-		- `<` `>` `<=` `>=` `!=`
-- `$(foo?)`: Tests if the variable exists.
-- `$(:foo?)`: Tests if the group was captured.
-- `$(==1..2)`: Test if the cursor position is in the range (inclusive)
-- `$(!=1..2)`: Test if the cursor position isn't in the range (inclusive)
-- `$(==1, 2)`: Test if the cursor position is any one of the two
-- `$(foo==bar)`: Compare any two positions against each other.
-- `$(==1 | ==2)`: If any one of the clauses match.
-- `$(==1 & ==2)`: If both of the clauses match.
-	- Has more priority than the OR operator.
-
-## Matching a captured match
-
-- `\<foo>`
-	- Runs a named group again.
-	- Re-captures the group as `foo.1` or `foo.N` if it was re-captured before.
-- `\<g>`
-	- Recurses group.
-- `\<e>`
-	- Recurses expression.
-- `\<foo>`
-	- Matches the contents of a captured string of a group.
-- `\<foo[1..2]>`
-	- Matches a section of the contents of a captured string.
+- `${@foo=1; @bar=2}`: Multiple operations.
 
 
 
@@ -361,15 +372,41 @@ You can combine group types.
 		- `s` will be matched if the optional succeeded.
 		- `f` will be matched if the optional failed.
 		- If `s` or `f` fails, nothing happens.
-- Compare operations:
-	- `$(==1|==2)->(a|b)`
+
+Any failable expression can be tested with: `(foo)->(s|f)`
+
+Use `$i` to stop the error from propagating.
+
+## Compare operations
+
+- `$[==1]`: Test if the cursor position is equal to 1.
+	- All position operations:
+		- `a<b` `a>b` `a<=b` `a>=b` `a!=b`
+	- In range operator (`a?=b`):
+		- `$[?=foo]`: Tests if the cursor position is in the capture's range
+		- `$[?=1..2]`: Tests if the cursor position is in the range
+	- Matching group operator (`??b`):
+		- `$[??foo]`: Tests if the foo capture is currently being matched.
+	- Other operators:
+		- Exists operator (`?b`)
+			- `$[?@foo]`: Tests if the variable exists.
+			- `$[?foo]`: Tests if the group was captured yet.
+- `$[==1..2]`: Test if the cursor position is in the range (inclusive)
+- `$[!=1..2]`: Test if the cursor position isn't in the range (inclusive)
+- `$[==1, 2]`: Test if the cursor position is any one of the two
+- `$[foo==bar]`: Compare any two positions against each other.
+- `$[==1 | ==2]`: If any one of the clauses match.
+- `$[==1 & ==2]`: If both of the clauses match.
+	- Has more priority than the OR operator.
+- Conditionals:
+	- `$[==1|==2]->(a|b)`
 		- Tests the clauses one by one, starting from the first.
 		- If a clause is true, matches the corresponding expression.
 		- If none of the clauses match, fails and starts backtrackting.
 		- Tries the other clauses when backtracking.
-	- `$(==1|==2|else)->(a|b|c)`: Else clause.
+	- `$[==1|==2|else]->(a|b|c)`: Else clause.
 		- The else clause succeeds no matter what.
-	- `$(==1 |! ==2)->(a|b)`: Possessive.
-		- If a clause before the posessive OR succeeds, doesn't try the clauses after it when backtracking.
-	- `$(==1|==2)->(a)`
+	- `$[==1 || ==2]->(a|b)`: Possessive.
+		- If any clause before the posessive OR succeeds, doesn't try the clauses after it when backtracking.
+	- `$[==1|==2]->(a)`
 		- If there aren't enough expressions, the extraneous clauses succeed without matching anything.
