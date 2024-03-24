@@ -1,3 +1,5 @@
+# 🚧 Cancelled for now 🚧
+
 # Options
 
 - `ignore_ws`: Doesn't match whitespace characters.
@@ -128,21 +130,20 @@ Any non special characters are matched literally. (when `literal_only` is turned
 - `(!<;abc)`: Negative lookbehind.
 	- Equivalent to: `[$(^..0)(abc)$(==:g)]->($!)`
 - `(foo;abc)`: Capture group
-- `($bar;abc)`: Global capture
-- `(::$foo;abc)`: Definition
-	- Does not match, only defines the group for later use.
-- `(->$foo)`: Match another group
-	- `(->$foo)`: Runs a named group.
-	- `(->$g)`: Recurses group.
-	- `(->$e)`: Recurses expression.
-	- `(->.foo)`: Matches the contents of a capture.
-	- `(->.foo[1..2])`: Matches a section of the contents of a capture.
+- `(::foo)`: Match a captured group again
+	- `(::foo)`: Match the expression of a group again.
+		- `(::g)`: Recurses the current group.
+		- `(::e)`: Recurses the expression.
+	- `(::foo[])`: Matches the matched contents of a capture.
+	- `(::foo[1..2])`: Matches a section of the contents.
+- `($bar;abc)`: Group definition
+- `(::$foo)`: Match a defined group
 
 You can combine group types.
 
 - `(?foo;abc)`: Case insensitive, capture as `.foo`.
 - `[>foo;abc]`: Optional lookahead, capture as `.foo`.
-- `(foo->$bar)`: Run group `bar` and capture it as `.foo`.
+- `(foo::$bar)`: Run group `bar` and capture it as `.foo`.
 
 ## One of
 
@@ -269,7 +270,7 @@ You can combine group types.
 
 When capturing:
 
-- `foo`: `.foo`.
+- `foo`: Same as `.foo`.
 - `~foo`: A sub capture of the expression.
 - `.foo`: A sub capture of the current group.
 - `..foo`: A sub capture of the parent group / a sibling capture.
