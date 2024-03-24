@@ -10,9 +10,6 @@ from collections.abc import Iterator
 import re
 
 import inkparse.const as const
-from inkparse.expr import (
-    Expr,
-)
 
 _T = TypeVar("_T")
 

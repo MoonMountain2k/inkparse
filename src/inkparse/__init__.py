@@ -1,7 +1,6 @@
 
 import inkparse.const as const
 import inkparse.main
-import inkparse.expr
 import inkparse.general as general
 from inkparse.main import (
     ParseError,
@@ -9,7 +8,4 @@ from inkparse.main import (
     Checkpoint,
     Token,
     Result,
-)
-from inkparse.expr import (
-    Expr,
 )
