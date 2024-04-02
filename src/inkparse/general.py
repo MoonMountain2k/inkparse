@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from typing import Callable
+from typing import Callable, Any, Literal
 
 from collections.abc import Sequence
 
@@ -16,16 +16,15 @@ GENERAL_ESCAPES = {
     't': '\t',
 }
 
-def unicode_escape(si: StringIterator) -> Result[str] | None:
-    """Token type: None"""
-    with si() as ckpt:
-        if si.literal("u"):
-            if (code := si.take(4)) is not None:
-                if all(c in const.HEXADECIMAL for c in code):
-                    return ckpt.result(chr(int(code, base=16)))
-            raise ckpt.error("Expected 4 hexadecimal characters after unicode escape sequence.")
-        else:
-            return None
+def unicode_escape(si: StringIterator) -> Result[str, None] | None:
+    with si() as c:
+        if not si.literal("u"):
+            return c.fail()
+        if (code := si.take(4)) is None:
+            raise c.error("Expected 4 hexadecimal characters after unicode escape sequence but got EOF.")
+        if not all(c in const.HEXADECIMAL for c in code):
+            raise c.error("Expected 4 hexadecimal characters after unicode escape sequence.")
+        return c.result(chr(int(code, base=16)))
 
 def quoted_string(
     si: StringIterator,
@@ -34,11 +33,10 @@ def quoted_string(
     end: Sequence[str] = ('"', "'"),
     escape: str = '\\',
     custom_escapes: dict[str, str] = GENERAL_ESCAPES,
-    advanced_escapes: Sequence[Callable[[StringIterator], Result[str] | None]] = (unicode_escape,),
-) -> Result[str] | None:
-    """Token type: `quoted_string`"""
+    advanced_escapes: Sequence[Callable[[StringIterator], Result[str, Any] | None]] = (unicode_escape,),
+) -> Result[str, Literal["quoted_string"]] | None:
     assert len(start) == len(end), "The number of starting quotes and ending quotes don't match."
-    with si() as ckpt:
+    with si() as c:
         quote_index = 0
         for i, s in enumerate(start):
             if si.literal(s):
@@ -62,24 +60,23 @@ def quoted_string(
                         if (char := si.take(1)) is not None:
                             data.append(char)
                         else:
-                            raise si.error_note(f"Expected a character to escape after `{escape}`.", ("In quote:", ckpt.pos))
+                            raise si.error_note(f"Expected a character to escape after `{escape}`.", ("In quote:", c.pos))
             elif si.literal(end[quote_index]):
-                return ckpt.result("".join(data), "quoted_string")
+                return c.result("".join(data), "quoted_string")
             else:
                 if (char := si.take(1)) is not None:
                     data.append(char)
                 else:
-                    raise si.error_note(f"Expected closing quote `{end}`.", ("Starting quote:", ckpt.pos))
+                    raise si.error_note(f"Expected closing quote `{end}`.", ("Starting quote:", c.pos))
 
 def raw_quoted_string(
     si: StringIterator,
     *,
     start: Sequence[str] = ('r"', "r'"),
     end: Sequence[str] = ('"', "'"),
-) -> Result[str] | None:
-    """Token type: `raw_quoted_string`"""
+) -> Result[str, Literal["raw_quoted_string"]] | None:
     assert len(start) == len(end), "The number of starting quotes and ending quotes don't match."
-    with si() as ckpt:
+    with si() as c:
         quote_index = 0
         for i, s in enumerate(start):
             if si.literal(s):
@@ -90,26 +87,24 @@ def raw_quoted_string(
         data: list[str] = []
         while True:
             if si.literal(end[quote_index]):
-                return ckpt.result("".join(data), "raw_quoted_string")
+                return c.result("".join(data), "raw_quoted_string")
             else:
                 if (char := si.take(1)) is not None:
                     data.append(char)
                 else:
-                    raise si.error_note(f"Expected closing quote `{end}`.", ("Starting quote:", ckpt.pos))
+                    raise si.error_note(f"Expected closing quote `{end}`.", ("Starting quote:", c.pos))
 
 def integer_number(
     si: StringIterator,
     base: int = 0,
-) -> Result[int] | None:
+) -> Result[int, Literal["integer"]] | None:
     """
-    Token type: `integer`
-
     If `base` is 0, the base is interpreted from the string.
     - `0b`: Binary
     - `0o`: Octal
     - `0x`: Hexadecimal
     """
-    with si() as ckpt:
+    with si() as c:
         si.literal("-") # optional
         if base == 0:
             if si.literal("0b"):
@@ -137,18 +132,10 @@ def integer_number(
                 return None
             while si.literal_any_of(*const.DECIMAL):
                 pass
-        return ckpt.result(int(ckpt.get_string(), base=base), "integer")
+        return c.result(int(c.get_string(), base=base), "integer")
 
-def float_number(si: StringIterator) -> Result[float] | None:
-    """
-    Token type: `float`
-
-    If `base` is 0, the base is interpreted from the string.
-    - `0b`: Binary
-    - `0o`: Octal
-    - `0x`: Hexadecimal
-    """
-    with si() as ckpt:
+def float_number(si: StringIterator) -> Result[float, Literal["float"]] | None:
+    with si() as c:
         si.literal("-") # optional
         if si.literal_any_of(*const.DECIMAL):
             while si.literal_any_of(*const.DECIMAL):
@@ -193,4 +180,4 @@ def float_number(si: StringIterator) -> Result[float] | None:
                 return None
         else:
             return None
-        return ckpt.result(float(ckpt.get_string()), "float")
+        return c.result(float(c.get_string()), "float")

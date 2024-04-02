@@ -3,7 +3,7 @@ Classes and functions for parsing strings.
 """
 
 from __future__ import annotations
-from typing import Literal, TypeVar, Generic, SupportsIndex
+from typing import cast, overload, Literal, TypeVar, Generic, SupportsIndex
 
 from contextlib import contextmanager
 from collections.abc import Iterator
@@ -12,6 +12,7 @@ import re
 import inkparse.const as const
 
 _T = TypeVar("_T")
+_TokenTypeT = TypeVar("_TokenTypeT")
 
 class ParseError(Exception):
     def __init__(self, msg: str, pos: int, src: str) -> None:
@@ -101,11 +102,11 @@ class StringIterator:
         return self.src[start_pos:self.pos]
 
     def error(self, msg: str) -> ParseError:
-        """Creates a ParseError at this iterator's position."""
+        """Creates a ParseError at the iterator's current position."""
         return ParseError(msg, self.pos, self.src)
 
     def error_note(self, msg: str, *notes: tuple[str, int]) -> ParseError:
-        """Creates a ParseError at this iterator's position, with positioned notes."""
+        """Creates a ParseError at the iterator's current position, with positioned notes."""
         err = ParseError(msg, self.pos, self.src)
         for note, pos in notes:
             err.add_pos_note(note, pos)
@@ -114,28 +115,28 @@ class StringIterator:
     @contextmanager
     def checkpoint(self) -> Iterator[Checkpoint]:
         """Same as `StringIterator.__call__()`"""
-        ckpt = Checkpoint(self)
+        c = Checkpoint(self)
         try:
-            yield ckpt
+            yield c
         except:
-            ckpt.rollback()
+            c.rollback()
             raise
         finally:
-            if not ckpt.committed:
-                ckpt.rollback()
+            if not c.committed:
+                c.rollback()
     
     @contextmanager
     def __call__(self) -> Iterator[Checkpoint]:
         """Same as `StringIterator.checkpoint()`"""
-        ckpt = Checkpoint(self)
+        c = Checkpoint(self)
         try:
-            yield ckpt
+            yield c
         except:
-            ckpt.rollback()
+            c.rollback()
             raise
         finally:
-            if not ckpt.committed:
-                ckpt.rollback()
+            if not c.committed:
+                c.rollback()
 
     def literal(self, value: str, *, case_sensitive: bool = True) -> bool:
         """
@@ -202,21 +203,35 @@ class Checkpoint:
         Create using `StringIterator.checkpoint()` or `StringIterator.__call__()` instead.
         """
         self.pos: int = si.pos
+        """The saved position."""
         self.si: StringIterator = si
+        """The bound StringIterator."""
         self.subtokens: list[Token] = []
+        """The tokens to use as the result."""
         self.committed: bool = False
 
     def commit(self) -> None:
         """Commits."""
         self.committed = True
 
+    def uncommit(self) -> None:
+        """Uncommits."""
+        self.committed = False
+
     def rollback(self) -> None:
         """Rolls back the iterator to the starting position."""
         self.si.pos = self.pos
+    
+    @overload
+    def add(self, token: None) -> None: ...
+    @overload
+    def add(self, token: Token[_TokenTypeT]) -> Token[_TokenTypeT]: ...
 
-    def add(self, token: Token | None) -> Token | None:
+    def add(self, token: Token[_TokenTypeT] | None) -> Token[_TokenTypeT] | None:
         """
         Adds a token/result into the resulting token's subtokens.
+
+        Returns the parameter.
         """
         if token is not None:
             self.subtokens.append(token)
@@ -225,26 +240,56 @@ class Checkpoint:
     def get_range(self) -> tuple[int, int]:
         return (self.pos, self.si.pos)
 
-    def get_token(self, token_type: str | None) -> Token:
-        """Returns a Token object without committing."""
-        return Token(token_type, self.get_range(), subtokens=self.subtokens)
+    @overload
+    def get_token(self) -> Token[None]: ...
+    @overload
+    def get_token(self, token_type: _TokenTypeT) -> Token[_TokenTypeT]: ...
 
-    def get_result(self, data: _T, token_type: str | None) -> Result[_T]:
+    def get_token(self, token_type: _TokenTypeT | None = None) -> Token[_TokenTypeT] | Token[None]:
+        """Returns a Token object without committing."""
+        return cast("Token[_TokenTypeT] | Token[None]", Token(token_type, self.get_range(), subtokens=self.subtokens))
+
+    @overload
+    def get_result(self, data: _T) -> Result[_T, None]: ...
+    @overload
+    def get_result(self, data: _T, token_type: _TokenTypeT) -> Result[_T, _TokenTypeT]: ...
+
+    def get_result(self, data: _T, token_type: _TokenTypeT | None = None) -> Result[_T, _TokenTypeT] | Result[_T, None]:
         """Returns a Result object without committing."""
-        return Result(data, token_type, self.get_range(), subtokens=self.subtokens)
+        return cast("Result[_T, _TokenTypeT] | Result[_T, None]", Result(data, token_type, self.get_range(), subtokens=self.subtokens))
     
     def get_string(self) -> str:
         return self.si.src[self.pos : self.si.pos]
 
-    def token(self, token_type: str | None = None) -> Token:
+    @overload
+    def fail(self) -> None: ...
+    @overload
+    def fail(self, val: _T) -> _T: ...
+
+    def fail(self, val: _T | None = None) -> _T | None:
+        """Rolls back and returns None, or if a parameter is supplied, returns the parameter as is."""
+        self.si.pos = self.pos
+        return val
+
+    @overload
+    def token(self) -> Token[None]: ...
+    @overload
+    def token(self, token_type: _TokenTypeT) -> Token[_TokenTypeT]: ...
+
+    def token(self, token_type: _TokenTypeT | None = None) -> Token[_TokenTypeT] | Token[None]:
         """Commits and returns a Token object."""
         self.committed = True
-        return Token(token_type, self.get_range(), subtokens=self.subtokens)
+        return cast("Token[_TokenTypeT] | Token[None]", Token(token_type, self.get_range(), subtokens=self.subtokens))
 
-    def result(self, data: _T, token_type: str | None = None) -> Result[_T]:
+    @overload
+    def result(self, data: _T) -> Result[_T, None]: ...
+    @overload
+    def result(self, data: _T, token_type: _TokenTypeT) -> Result[_T, _TokenTypeT]: ...
+
+    def result(self, data: _T, token_type: _TokenTypeT | None = None) -> Result[_T, _TokenTypeT] | Result[_T, None]:
         """Commits and returns a Result object."""
         self.committed = True
-        return Result(data, token_type, self.get_range(), subtokens=self.subtokens)
+        return cast("Result[_T, _TokenTypeT] | Result[_T, None]", Result(data, token_type, self.get_range(), subtokens=self.subtokens))
 
     def error(self, msg: str) -> ParseError:
         """Creates a ParseError at the checkpoint's starting position. Only raises if `token` is None."""
@@ -257,13 +302,21 @@ class Checkpoint:
             err.add_pos_note(note, pos)
         return err
 
-class Token:
-    def __init__(self, token_type: str | None = None, pos: tuple[int, int] | None = None, subtokens: list[Token] = []) -> None:
-        self.type: str | None = token_type
+class Token(Generic[_TokenTypeT]):
+    """
+    For typing: `Token[TokenTypeType]`
+    
+    Example: `Token[Literal["quoted_string"]]`
+    """
+    def __init__(self, token_type: _TokenTypeT, pos: tuple[int, int] | None = None, subtokens: list[Token] = []) -> None:
+        """
+        `token_type` can either be a string or None.
+        """
+        self.type: _TokenTypeT = token_type
         self.pos: tuple[int, int] | None = pos
         self.subtokens: list[Token] = subtokens
 
-    def with_type(self, token_type: str | None) -> Token:
+    def with_type(self, token_type: _TokenTypeT) -> Token:
         self.type = token_type
         return self
 
@@ -279,19 +332,17 @@ class Token:
         return True
     
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, str):
-            return self.type == other
-        elif isinstance(other, tuple):
+        if isinstance(other, tuple):
             return self.pos == other
         elif isinstance(other, Token):
             return self.type == other.type and self.pos == other.pos
         else:
-            return NotImplemented
+            return self.type == other
     
-    def __contains__(self, other: str | tuple | Token) -> bool:
+    def __contains__(self, other: object) -> bool:
         return any(other == token for token in self.subtokens)
     
-    def __getitem__(self, key: str | tuple | Token) -> Token:
+    def __getitem__(self, key: object) -> Token:
         for token in self.subtokens:
             if token == key:
                 return token
@@ -309,10 +360,15 @@ class Token:
             )
         )
 
-class Result(Token, Generic[_T]):
-    def __init__(self, data: _T, token_type: str | None, pos: tuple[int, int], subtokens: list[Token] = []) -> None:
+class Result(Token, Generic[_T, _TokenTypeT]):
+    """
+    For typing: `Result[ReturnDataType, TokenTypeType]`
+    
+    Example: `Result[str, Literal["quoted_string"]]`
+    """
+    def __init__(self, data: _T, token_type: _TokenTypeT, pos: tuple[int, int], subtokens: list[Token] = []) -> None:
         self.data: _T = data
-        self.type: str | None = token_type
+        self.type: _TokenTypeT = token_type
         self.pos: tuple[int, int] = pos
         self.subtokens: list[Token] = subtokens
 
