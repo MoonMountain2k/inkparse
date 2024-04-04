@@ -361,7 +361,7 @@ class Result(Token, Generic[_DataCovT, _TokenTypeCovT]):
     
     Example: `Result[str, Literal["quoted_string"]]`
     """
-    def __init__(self, data: _DataCovT, token_type: _TokenTypeCovT, pos: tuple[int, int], subtokens: list[Token] = []) -> None:
+    def __init__(self, data: _DataCovT, token_type: _TokenTypeCovT, pos: tuple[int, int] | None = None, subtokens: list[Token] = []) -> None:
         super().__init__(token_type, pos, subtokens)
         self.data: _DataCovT = data
 

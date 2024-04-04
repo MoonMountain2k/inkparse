@@ -9,4 +9,4 @@ from inkparse.main import (
     Result,
 )
 import inkparse.general as general
-import inkparse.lang
+import inkparse.lang as lang
