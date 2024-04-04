@@ -3,7 +3,7 @@ Classes and functions for parsing strings.
 """
 
 from __future__ import annotations
-from typing import cast, overload, Literal, TypeVar, Generic, SupportsIndex
+from typing import cast, overload, Literal, TypeVar, Generic, SupportsIndex, Final
 
 from contextlib import contextmanager
 from collections.abc import Iterator
@@ -12,7 +12,10 @@ import re
 import inkparse.const as const
 
 _T = TypeVar("_T")
+_DataT = TypeVar("_DataT")
 _TokenTypeT = TypeVar("_TokenTypeT")
+_DataCovT = TypeVar("_DataCovT", covariant=True)
+_TokenTypeCovT = TypeVar("_TokenTypeCovT", covariant=True)
 
 class ParseError(Exception):
     def __init__(self, msg: str, pos: int, src: str) -> None:
@@ -250,13 +253,13 @@ class Checkpoint:
         return cast("Token[_TokenTypeT] | Token[None]", Token(token_type, self.get_range(), subtokens=self.subtokens))
 
     @overload
-    def get_result(self, data: _T) -> Result[_T, None]: ...
+    def get_result(self, data: _DataT) -> Result[_DataT, None]: ...
     @overload
-    def get_result(self, data: _T, token_type: _TokenTypeT) -> Result[_T, _TokenTypeT]: ...
+    def get_result(self, data: _DataT, token_type: _TokenTypeT) -> Result[_DataT, _TokenTypeT]: ...
 
-    def get_result(self, data: _T, token_type: _TokenTypeT | None = None) -> Result[_T, _TokenTypeT] | Result[_T, None]:
+    def get_result(self, data: _DataT, token_type: _TokenTypeT | None = None) -> Result[_DataT, _TokenTypeT] | Result[_DataT, None]:
         """Returns a Result object without committing."""
-        return cast("Result[_T, _TokenTypeT] | Result[_T, None]", Result(data, token_type, self.get_range(), subtokens=self.subtokens))
+        return cast("Result[_DataT, _TokenTypeT] | Result[_DataT, None]", Result(data, token_type, self.get_range(), subtokens=self.subtokens))
     
     def get_string(self) -> str:
         return self.si.src[self.pos : self.si.pos]
@@ -282,14 +285,14 @@ class Checkpoint:
         return cast("Token[_TokenTypeT] | Token[None]", Token(token_type, self.get_range(), subtokens=self.subtokens))
 
     @overload
-    def result(self, data: _T) -> Result[_T, None]: ...
+    def result(self, data: _DataT) -> Result[_DataT, None]: ...
     @overload
-    def result(self, data: _T, token_type: _TokenTypeT) -> Result[_T, _TokenTypeT]: ...
+    def result(self, data: _DataT, token_type: _TokenTypeT) -> Result[_DataT, _TokenTypeT]: ...
 
-    def result(self, data: _T, token_type: _TokenTypeT | None = None) -> Result[_T, _TokenTypeT] | Result[_T, None]:
+    def result(self, data: _DataT, token_type: _TokenTypeT | None = None) -> Result[_DataT, _TokenTypeT] | Result[_DataT, None]:
         """Commits and returns a Result object."""
         self.committed = True
-        return cast("Result[_T, _TokenTypeT] | Result[_T, None]", Result(data, token_type, self.get_range(), subtokens=self.subtokens))
+        return cast("Result[_DataT, _TokenTypeT] | Result[_DataT, None]", Result(data, token_type, self.get_range(), subtokens=self.subtokens))
 
     def error(self, msg: str) -> ParseError:
         """Creates a ParseError at the checkpoint's starting position. Only raises if `token` is None."""
@@ -302,27 +305,19 @@ class Checkpoint:
             err.add_pos_note(note, pos)
         return err
 
-class Token(Generic[_TokenTypeT]):
+class Token(Generic[_TokenTypeCovT]):
     """
     For typing: `Token[TokenTypeType]`
     
     Example: `Token[Literal["quoted_string"]]`
     """
-    def __init__(self, token_type: _TokenTypeT, pos: tuple[int, int] | None = None, subtokens: list[Token] = []) -> None:
+    def __init__(self, token_type: _TokenTypeCovT, pos: tuple[int, int] | None = None, subtokens: list[Token] = []) -> None:
         """
         `token_type` can either be a string or None.
         """
-        self.type: _TokenTypeT = token_type
-        self.pos: tuple[int, int] | None = pos
+        self.type: Final[_TokenTypeCovT] = token_type
+        self.pos: Final[tuple[int, int] | None] = pos
         self.subtokens: list[Token] = subtokens
-
-    def with_type(self, token_type: _TokenTypeT) -> Token:
-        self.type = token_type
-        return self
-
-    def with_pos(self, pos: tuple[int, int] | None) -> Token:
-        self.pos = pos
-        return self
 
     def with_subtokens(self, subtokens: list[Token]) -> Token:
         self.subtokens = subtokens
@@ -360,17 +355,15 @@ class Token(Generic[_TokenTypeT]):
             )
         )
 
-class Result(Token, Generic[_T, _TokenTypeT]):
+class Result(Token, Generic[_DataCovT, _TokenTypeCovT]):
     """
     For typing: `Result[ReturnDataType, TokenTypeType]`
     
     Example: `Result[str, Literal["quoted_string"]]`
     """
-    def __init__(self, data: _T, token_type: _TokenTypeT, pos: tuple[int, int], subtokens: list[Token] = []) -> None:
-        self.data: _T = data
-        self.type: _TokenTypeT = token_type
-        self.pos: tuple[int, int] = pos
-        self.subtokens: list[Token] = subtokens
+    def __init__(self, data: _DataCovT, token_type: _TokenTypeCovT, pos: tuple[int, int], subtokens: list[Token] = []) -> None:
+        super().__init__(token_type, pos, subtokens)
+        self.data: _DataCovT = data
 
     def __repr__(self) -> str:
         return (
