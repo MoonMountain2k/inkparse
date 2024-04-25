@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from typing import Callable, Any, Literal
+from typing import Callable, Any, Literal, LiteralString
 
 from collections.abc import Sequence
 
@@ -8,176 +8,286 @@ from inkparse import *
 
 # quoted string
 
-GENERAL_ESCAPES = {
-    'b': '\b',
-    'f': '\f',
-    'n': '\n',
-    'r': '\r',
-    't': '\t',
-}
+class EscapeProvider:
+    def __call__(self, si: StringIterator) -> Result[str, Literal["escape_sequence"]] | ParseFailure:
+        raise NotImplementedError
 
-def unicode_escape(si: StringIterator) -> Result[str, None] | None:
-    with si() as c:
-        if not si.literal("u"):
-            return c.fail()
-        if (code := si.take(4)) is None:
-            raise c.error("Expected 4 hexadecimal characters after unicode escape sequence but got EOF.")
-        if not all(c in const.HEXADECIMAL for c in code):
-            raise c.error("Expected 4 hexadecimal characters after unicode escape sequence.")
-        return c.result(chr(int(code, base=16)))
+class BasicEscapeProvider(EscapeProvider):
+    def __init__(
+        self,
+        escape_char: str = "\\",
+        escapes: dict[str, str] = {
+            'b': '\b',
+            'f': '\f',
+            'n': '\n',
+            'r': '\r',
+            't': '\t',
+        },
+    ) -> None:
+        self.escape_char: str = escape_char
+        self.escapes: dict[str, str] = escapes
+
+    def __call__(self, si: StringIterator) -> Result[str, Literal["escape_sequence"]] | ParseFailure:
+        with si() as c:
+            if not si.literal(self.escape_char):
+                return c.fail(f"Expected escape character `{self.escape_char}`.")
+            if r := self.unicode_escape(si):
+                return c.result(r.data, "escape_sequence")
+            else:
+                if char := si.take(1):
+                    return c.result(char, "escape_sequence")
+                else:
+                    raise c.error(f"Expected a character to escape after `{self.escape_char}`.")
+
+    def unicode_escape(self, si: StringIterator) -> Result[str, None] | ParseFailure:
+        with si() as c:
+            if not si.literal("u"):
+                return c.fail("Expected unicode escape `\\uXXXX`.")
+            if not (code := si.take(4)):
+                raise c.error("Expected 4 hexadecimal characters after unicode escape sequence but met EOF.")
+            if not all(c in const.HEXADECIMAL for c in code):
+                raise c.error("Expected 4 hexadecimal characters after unicode escape sequence.")
+            return c.result(chr(int(code, base=16)))
+
+DEFAULT_ESCAPE_PROVIDER = BasicEscapeProvider()
 
 def quoted_string(
     si: StringIterator,
+    quotes: Sequence[Sequence[str]] = (
+        ('"', '"'),
+        ("'", "'"),
+    ),
     *,
-    start: Sequence[str] = ('"', "'"),
-    end: Sequence[str] = ('"', "'"),
-    escape: str = '\\',
-    custom_escapes: dict[str, str] = GENERAL_ESCAPES,
-    advanced_escapes: Sequence[Callable[[StringIterator], Result[str, Any] | None]] = (unicode_escape,),
-) -> Result[str, Literal["quoted_string"]] | None:
-    assert len(start) == len(end), "The number of starting quotes and ending quotes don't match."
-    with si() as c:
-        quote_index = 0
-        for i, s in enumerate(start):
-            if si.literal(s):
-                quote_index = i
+    escape: EscapeProvider = DEFAULT_ESCAPE_PROVIDER,
+) -> Result[str, Literal["quoted_string"]] | ParseFailure:
+    with si(note="In quoted string.") as c:
+        for start, end in quotes:
+            if si.literal(start):
                 break
         else:
-            return None
+            return c.fail("Expected starting quote.")
         data: list[str] = []
         while True:
-            if si.literal(escape):
-                for sequence, result in custom_escapes.items():
-                    if si.literal(sequence):
-                        data.append(result)
-                        break
-                else:
-                    for parser in advanced_escapes:
-                        if (parser_output := parser(si)) is not None:
-                            data.append(parser_output.data)
-                            break
-                    else:
-                        if (char := si.take(1)) is not None:
-                            data.append(char)
-                        else:
-                            raise si.error_note(f"Expected a character to escape after `{escape}`.", ("In quote:", c.pos))
-            elif si.literal(end[quote_index]):
+            if r := escape(si):
+                data.append(r.data)
+                continue
+            elif si.literal(end):
                 return c.result("".join(data), "quoted_string")
             else:
                 if (char := si.take(1)) is not None:
                     data.append(char)
                 else:
-                    raise si.error_note(f"Expected closing quote `{end}`.", ("Starting quote:", c.pos))
+                    raise c.error(f"Met EOF before closing quote `{end}`.")
 
 def raw_quoted_string(
     si: StringIterator,
-    *,
-    start: Sequence[str] = ('r"', "r'"),
-    end: Sequence[str] = ('"', "'"),
-) -> Result[str, Literal["raw_quoted_string"]] | None:
-    assert len(start) == len(end), "The number of starting quotes and ending quotes don't match."
-    with si() as c:
-        quote_index = 0
-        for i, s in enumerate(start):
-            if si.literal(s):
-                quote_index = i
+    quotes: Sequence[Sequence[str]] = (
+        ('"', '"'),
+        ("'", "'"),
+    ),
+    prefix: str = "r",
+) -> Result[str, Literal["raw_quoted_string"]] | ParseFailure:
+    with si(note="In raw quoted string.") as c:
+        if not si.literal(prefix):
+            return c.fail(f"Expected prefix `{prefix}`.")
+        for start, end in quotes:
+            if si.literal(start):
                 break
         else:
-            return None
+            return c.fail("Expected starting quote.")
         data: list[str] = []
         while True:
-            if si.literal(end[quote_index]):
+            if si.literal(end):
                 return c.result("".join(data), "raw_quoted_string")
             else:
                 if (char := si.take(1)) is not None:
                     data.append(char)
                 else:
-                    raise si.error_note(f"Expected closing quote `{end}`.", ("Starting quote:", c.pos))
+                    raise c.error(f"Met EOF before closing quote `{end}`.")
 
-def integer_number(
+def hashed_quoted_string(
     si: StringIterator,
-    base: int = 0,
-) -> Result[int, Literal["integer"]] | None:
-    """
-    If `base` is 0, the base is interpreted from the string.
-    - `0b`: Binary
-    - `0o`: Octal
-    - `0x`: Hexadecimal
-    """
-    with si() as c:
-        si.literal("-") # optional
-        if base == 0:
-            if si.literal("0b"):
-                if not si.literal_any_of(*const.BINARY):
-                    raise si.error("Expected a binary digit after 0b.")
-                while si.literal_any_of(*const.BINARY):
-                    pass
-            elif si.literal("0o"):
-                if not si.literal_any_of(*const.OCTAL):
-                    raise si.error("Expected an octal digit after 0o.")
-                while si.literal_any_of(*const.OCTAL):
-                    pass
-            elif si.literal("0x"):
-                if not si.literal_any_of(*const.HEXADECIMAL, case_sensitive=False):
-                    raise si.error("Expected a hexadecimal digit after 0x.")
-                while si.literal_any_of(*const.HEXADECIMAL):
-                    pass
-            else:
-                if not si.literal_any_of(*const.DECIMAL):
-                    return None
-                while si.literal_any_of(*const.DECIMAL):
-                    pass
+    quotes: Sequence[Sequence[str]] = (
+        ('"', '"'),
+        ("'", "'"),
+    ),
+    *,
+    hash_char: str = "#",
+    escape: EscapeProvider = DEFAULT_ESCAPE_PROVIDER,
+) -> Result[str, Literal["hashed_quoted_string"]] | ParseFailure:
+    with si(note="In quoted string.") as c:
+        hash_count = 0
+        for hash_count in repeat():
+            if not si.literal(hash_char):
+                break
+        for start, end in quotes:
+            if si.literal(start):
+                break
         else:
-            if not si.literal_any_of(*const.DECIMAL):
-                return None
-            while si.literal_any_of(*const.DECIMAL):
-                pass
+            return c.fail("Expected starting quote.")
+        end = end + hash_char*hash_count
+        data: list[str] = []
+        while True:
+            if r := escape(si):
+                data.append(r.data)
+                continue
+            elif si.literal(end):
+                return c.result("".join(data), "hashed_quoted_string")
+            else:
+                if (char := si.take(1)) is not None:
+                    data.append(char)
+                else:
+                    raise c.error(f"Met EOF before closing quote `{end}`.")
+
+def raw_hashed_quoted_string(
+    si: StringIterator,
+    quotes: Sequence[Sequence[str]] = (
+        ('"', '"'),
+        ("'", "'"),
+    ),
+    prefix: str = "r",
+    *,
+    hash_char: str = "#",
+) -> Result[str, Literal["raw_hashed_quoted_string"]] | ParseFailure:
+    with si(note="In raw quoted string.") as c:
+        if not si.literal(prefix):
+            return c.fail(f"Expected prefix `{prefix}`.")
+        hash_count = 0
+        for hash_count in repeat():
+            if not si.literal(hash_char):
+                break
+        for start, end in quotes:
+            if si.literal(start):
+                break
+        else:
+            return c.fail("Expected starting quote.")
+        end = end + hash_char*hash_count
+        data: list[str] = []
+        while True:
+            if si.literal(end):
+                return c.result("".join(data), "raw_hashed_quoted_string")
+            else:
+                if (char := si.take(1)) is not None:
+                    data.append(char)
+                else:
+                    raise c.error(f"Met EOF before closing quote `{end}`.")
+
+_bindigit       = literal("0", "1")
+_octdigit       = literal("0", "1", "2", "3", "4", "5", "6", "7")
+_nonzerodigit   = literal(     "1", "2", "3", "4", "5", "6", "7", "8", "9")
+_decdigit       = literal("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+_hexdigit       = anycase("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f")
+
+_decinteger = seq(
+    _nonzerodigit,
+    repeat0(optional("_"), _decdigit),
+)
+_bininteger = seq(
+    "0",
+    anycase("b"),
+    repeat1(
+        optional("_"),
+        _bindigit
+    ),
+)
+_octinteger = seq(
+    "0",
+    anycase("o"),
+    repeat1(
+        optional("_"),
+        _octdigit
+    ),
+)
+_hexinteger = seq(
+    "0",
+    anycase("x"),
+    repeat1(
+        optional("_"),
+        _hexdigit
+    ),
+)
+_zerointeger = seq(
+    repeat1("0"),
+    repeat0(optional("_"), "0"),
+)
+_integer = oneof(_decinteger, _bininteger, _octinteger, _hexinteger, _zerointeger)
+
+def integer_literal(
+    si: StringIterator,
+) -> Result[int, Literal["integer_literal"]] | ParseFailure:
+    with si() as c:
+        si.character("-") # optional
+        if _integer(si):
+            return c.result(int(c.get_string(), base=0), "integer_literal")
+        else:
+            return c.fail("Expected an integer literal.")
+
+def unsigned_integer_literal(
+    si: StringIterator,
+) -> Result[int, Literal["integer_literal"]] | ParseFailure:
+    with si() as c:
+        if _integer(si):
+            return c.result(int(c.get_string(), base=0), "integer_literal")
+        else:
+            return c.fail("Expected an integer literal.")
+
+def integer(
+    si: StringIterator,
+    base: int = 10,
+) -> Result[int, Literal["integer"]] | ParseFailure:
+    if not 2 <= base <= 36:
+        raise ValueError("Invalid base.")
+    with si() as c:
+        si.character("-") # optional
+        usable_digits = const.DIGITS36[:base]
+        if si.peek(1) in usable_digits:
+            si.pos += 1
+        else:
+            return c.fail(f"Expected an integer of base {base}.")
+        while si.peek(1) in usable_digits:
+            si.pos += 1
         return c.result(int(c.get_string(), base=base), "integer")
 
-def float_number(si: StringIterator) -> Result[float, Literal["float"]] | None:
+def unsigned_integer(
+    si: StringIterator,
+    base: int = 10,
+) -> Result[int, Literal["integer"]] | ParseFailure:
+    if not 2 <= base <= 36:
+        raise ValueError("Invalid base.")
     with si() as c:
-        si.literal("-") # optional
-        if si.literal_any_of(*const.DECIMAL):
-            while si.literal_any_of(*const.DECIMAL):
-                pass
-            if si.literal("."):
-                if si.literal_any_of(*const.DECIMAL):
-                    while si.literal_any_of(*const.DECIMAL):
-                        pass
-                    if si.literal("e", case_sensitive=False):
-                        si.literal("-") or si.literal("+")
-                        if not si.literal_any_of(*const.DECIMAL):
-                            return None
-                        while si.literal_any_of(*const.DECIMAL):
-                            pass
-                elif si.literal("e", case_sensitive=False):
-                    si.literal("-") or si.literal("+")
-                    if not si.literal_any_of(*const.DECIMAL):
-                        return None
-                    while si.literal_any_of(*const.DECIMAL):
-                        pass
-                else:
-                    return None
-            elif si.literal("e", case_sensitive=False):
-                si.literal("-") or si.literal("+")
-                if not si.literal_any_of(*const.DECIMAL):
-                    return None
-                while si.literal_any_of(*const.DECIMAL):
-                    pass
-            else:
-                return None
-        elif si.literal("."):
-            if si.literal_any_of(*const.DECIMAL):
-                while si.literal_any_of(*const.DECIMAL):
-                    pass
-                if si.literal("e", case_sensitive=False):
-                    si.literal("-") or si.literal("+")
-                    if not si.literal_any_of(*const.DECIMAL):
-                        return None
-                    while si.literal_any_of(*const.DECIMAL):
-                        pass
-            else:
-                return None
+        usable_digits = const.DIGITS36[:base]
+        if si.peek(1) in usable_digits:
+            si.pos += 1
         else:
-            return None
-        return c.result(float(c.get_string()), "float")
+            return c.fail(f"Expected an integer of base {base}.")
+        while si.peek(1) in usable_digits:
+            si.pos += 1
+        return c.result(int(c.get_string(), base=base), "integer")
+
+_digitpart     =  seq(_decdigit, repeat0(optional("_"), _decdigit))
+_exponent      =  seq(anycase("e"), optional_oneof("+", "-"), _digitpart)
+# _fraction      =  seq(".", _digitpart)
+# _pointfloat    =  oneof(seq(optional(_digitpart), _fraction), seq(_digitpart, "."))
+_pointfloat    =  optional(_digitpart, success=seq(".", optional(_digitpart)), fail=seq(".", _digitpart))
+_exponentfloat =  seq(oneof(_digitpart, _pointfloat), _exponent)
+_floatnumber   =  oneof(_pointfloat, _exponentfloat)
+
+
+def float_literal(
+    si: StringIterator,
+) -> Result[int, Literal["float_literal"]] | ParseFailure:
+    with si() as c:
+        si.character("-") # optional
+        if _floatnumber(si):
+            return c.result(int(c.get_string(), base=0), "float_literal")
+        else:
+            return c.fail("Expected a float literal.")
+
+def unsigned_float_literal(
+    si: StringIterator,
+) -> Result[int, Literal["float_literal"]] | ParseFailure:
+    with si() as c:
+        if _floatnumber(si):
+            return c.result(int(c.get_string(), base=0), "float_literal")
+        else:
+            return c.fail("Expected a float literal.")
