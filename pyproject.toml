@@ -16,13 +16,13 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+keywords = []
 
-dependencies = [
-]
+dependencies = []
 
 [project.urls]
 "Homepage" = "https://github.com/MoonMountain2k/inkparse"
-"Bug Tracker" = "https://github.com/MoonMountain2k/inkparse/issues"
+"Issues" = "https://github.com/MoonMountain2k/inkparse/issues"
 
 [tool.hatch.build.targets.sdist]
 

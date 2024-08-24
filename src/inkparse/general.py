@@ -1,3 +1,6 @@
+"""
+General purpose parsers.
+"""
 
 from __future__ import annotations
 from typing import Callable, Any, Literal, LiteralString
@@ -5,6 +8,18 @@ from typing import Callable, Any, Literal, LiteralString
 from collections.abc import Sequence
 
 from inkparse import *
+
+__all__ = [
+    "quoted_string",
+    "raw_quoted_string",
+    "hashed_quoted_string",
+    "raw_hashed_quoted_string",
+    "integer_literal",
+    "unsigned_integer_literal",
+    "integer",
+    "unsigned_integer",
+    "float_literal",
+]
 
 # quoted string
 
@@ -45,7 +60,7 @@ class BasicEscapeProvider(EscapeProvider):
                 return c.fail("Expected unicode escape `\\uXXXX`.")
             if not (code := si.take(4)):
                 raise c.error("Expected 4 hexadecimal characters after unicode escape sequence but met EOF.")
-            if not all(c in const.HEXADECIMAL for c in code):
+            if not all(c in constants.HEXADECIMAL for c in code):
                 raise c.error("Expected 4 hexadecimal characters after unicode escape sequence.")
             return c.result(chr(int(code, base=16)))
 
@@ -117,7 +132,7 @@ def hashed_quoted_string(
 ) -> Result[str, Literal["hashed_quoted_string"]] | ParseFailure:
     with si(note="In quoted string.") as c:
         hash_count = 0
-        for hash_count in repeat():
+        for hash_count in forever():
             if not si.literal(hash_char):
                 break
         for start, end in quotes:
@@ -153,7 +168,7 @@ def raw_hashed_quoted_string(
         if not si.literal(prefix):
             return c.fail(f"Expected prefix `{prefix}`.")
         hash_count = 0
-        for hash_count in repeat():
+        for hash_count in forever():
             if not si.literal(hash_char):
                 break
         for start, end in quotes:
@@ -239,7 +254,7 @@ def integer(
         raise ValueError("Invalid base.")
     with si() as c:
         si.character("-") # optional
-        usable_digits = const.DIGITS36[:base]
+        usable_digits = constants.DIGITS36[:base]
         if si.peek(1) in usable_digits:
             si.pos += 1
         else:
@@ -255,7 +270,7 @@ def unsigned_integer(
     if not 2 <= base <= 36:
         raise ValueError("Invalid base.")
     with si() as c:
-        usable_digits = const.DIGITS36[:base]
+        usable_digits = constants.DIGITS36[:base]
         if si.peek(1) in usable_digits:
             si.pos += 1
         else:

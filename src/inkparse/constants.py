@@ -5,6 +5,17 @@ General use constants.
 from __future__ import annotations
 from typing import Final
 
+__all__ = [
+    "WHITESPACES",
+    "BINARY",
+    "OCTAL",
+    "DECIMAL",
+    "HEXADECIMAL",
+    "ALPHABETIC",
+    "ALNUM",
+    "DIGITS36",
+]
+
 WHITESPACES: Final = frozenset({" ", "\t", "\n", "\r", "\f"})
 
 BINARY: Final = frozenset({"0", "1"})

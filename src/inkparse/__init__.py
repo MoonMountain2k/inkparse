@@ -26,35 +26,30 @@ if result:
 else:
     ... # `result` is a `ParseFailure` object
 ```
+
+---
+
+String positions are between characters and start from 0.
+
+(Examples of string positions include function arguments that have "pos" or "position" in their name.)
+
+In a string: `"abcdef"`
+```
+ a b c d e f
+^ ^ ^ ^ ^ ^ ^
+0 1 2 3 4 5 6
+```
+
+However, line numbers and column numbers start from 1.
+
+(Examples of line numbers and column numbers include function arguments that have "line" or "col" / "column" in their name respectively.)
+
+The first line in a string is line 1.
+
+The space before the first character (the rightmost position a text caret can be) is column 1.
+```
 """
 
-import inkparse.const as const
-import inkparse.main
-from inkparse.main import (
-    repeat,
-    PosNote,
-    ParseFailure,
-    ParseError,
-    Token,
-    Result,
-    StringIterator,
-    Checkpoint,
-    literal,
-    anycase,
-    regex,
-    ws0,
-    ws1,
-    has_chars,
-    take,
-    is_eof,
-    not_eof,
-    seq,
-    oneof,
-    optional_oneof,
-    optional,
-    inverted,
-    lookahead,
-    repeat0,
-    repeat1,
-)
+import inkparse.constants as constants
+from inkparse.main import *
 import inkparse.general as general

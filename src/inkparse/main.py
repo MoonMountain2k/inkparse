@@ -6,15 +6,42 @@ from __future__ import annotations
 from typing import overload, Any, Self, Literal, TypeVar, Generic, SupportsIndex, Final, Callable, Sequence, Protocol
 from types import TracebackType
 
-from contextlib import contextmanager
+# from contextlib import contextmanager
 from collections.abc import Iterator, Iterable
 import re
-import enum
+import textwrap
 
-import inkparse.const as const
+import inkparse.constants as constants
 
+__all__ = [
+    "forever",
+    "PosNote",
+    "ParseFailure",
+    "ParseError",
+    "Token",
+    "Result",
+    "StringIterator",
+    "Checkpoint",
+    "literal",
+    "anycase",
+    "regex",
+    "ws0",
+    "ws1",
+    "has_chars",
+    "take",
+    "is_eof",
+    "not_eof",
+    "seq",
+    "oneof",
+    "optional_oneof",
+    "optional",
+    "inverted",
+    "lookahead",
+    "repeat0",
+    "repeat1",
+]
 
-def repeat(*, start: int = 0, step: int = 1) -> Iterator[int]:
+def forever(*, start: int = 0, step: int = 1) -> Iterator[int]:
     """
     `range()` with no end.
     """
@@ -33,15 +60,644 @@ _TokenTypeCovT = TypeVar("_TokenTypeCovT", bound=str|None, covariant=True)
 
 
 
-class PosNote:
+class Positioned(Protocol):
+    pos: int | tuple[int, int] | None
+    src: str | None
+    filename: str | None
+
+class PosNote(Positioned):
     """
     Positioned note.
-    
-    For `ParseError`s and `ParseFailure`s.
     """
-    def __init__(self, pos: int, msg: str | None = None) -> None:
-        self.pos: int = pos
-        self.msg: str | None = msg
+
+    @overload
+    def __init__(
+        self,
+        msg: str,
+        pos: int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        msg: str,
+        pos: Positioned,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        msg: str,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> None:
+        """
+        All parameters are optional.
+        """
+        self.msg: str = msg
+        self.pos: int | tuple[int, int] | None
+        self.src: str | None
+        self.filename: str | None
+        if pos is None or isinstance(pos, (int, tuple)):
+            self.pos = pos
+            self.src = src
+            self.filename = filename
+        else:
+            self.pos = pos.pos
+            self.src = pos.src
+            self.filename = pos.filename
+
+    @property
+    def pos_start(self) -> int | None:
+        if self.pos is None:
+            return None
+        elif isinstance(self.pos, int):
+            return self.pos
+        else:
+            return self.pos[0]
+
+    @pos_start.setter
+    def pos_start(self, new: int) -> None:
+        if isinstance(self.pos, tuple):
+            self.pos = (new, self.pos[1])
+        else:
+            self.pos = new
+
+    @property
+    def pos_end(self) -> int | None:
+        if isinstance(self.pos, tuple):
+            return self.pos[1]
+        else:
+            return None
+
+    @pos_end.setter
+    def pos_end(self, new: int) -> None:
+        if isinstance(self.pos, tuple):
+            self.pos = (self.pos[0], new)
+        else:
+            self.pos = (new, new)
+
+    def pos_to_simple_str(
+        self,
+        *,
+        pos: int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> str:
+        if pos is None:
+            pos = self.pos
+        if src is None:
+            src = self.src
+        if filename is None:
+            filename = self.filename
+        out = []
+        if filename is not None:
+            out.append('file "'+filename+'"')
+        if pos is not None:
+            if src is None:
+                if isinstance(pos, int):
+                    out.append(f"at position {pos}")
+                elif pos[0] == pos[1]:
+                    out.append(f"at position {pos[0]}")
+                else:
+                    out.append(f"from position {pos[0]}")
+                    out.append(f"to position {pos[1]}")
+            else:
+                if isinstance(pos, int):
+                    line, column, _ = PosNote._get_line_and_column(src, pos)
+                    out.append(f"at position {pos} (line {line}, column {column})")
+                elif pos[0] == pos[1]:
+                    line, column, _ = PosNote._get_line_and_column(src, pos[0])
+                    out.append(f"at position {pos[0]} (line {line}, column {column})")
+                else:
+                    line, column, _ = PosNote._get_line_and_column(src, pos[0])
+                    out.append(f"from position {pos[0]} (line {line}, column {column})")
+                    line, column, _ = PosNote._get_line_and_column(src, pos[1])
+                    out.append(f"to position {pos[1]} (line {line}, column {column})")
+        return ", ".join(out)
+
+    def pos_to_multiline_str(
+        self,
+        terminal_width: int | None = None,
+        *,
+        pos: int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> str:
+        assert terminal_width is None or terminal_width >= 40
+        if pos is None:
+            pos = self.pos
+        if src is None:
+            src = self.src
+        if filename is None:
+            filename = self.filename
+        out = []
+        preview = ""
+        if filename is not None:
+            out.append('In file "'+filename+'"')
+        if pos is not None:
+            if src is None:
+                if isinstance(pos, int):
+                    out.append(f"At position {pos}")
+                elif pos[0] == pos[1]:
+                    out.append(f"At position {pos[0]}")
+                else:
+                    out.append(f"From position {pos[0]}")
+                    out.append(f"To position {pos[1]}")
+            else:
+                if isinstance(pos, int):
+                    line, column, found = PosNote._get_line_and_column(src, pos)
+                    out.append(f"At position {pos} (line {line}, column {column})")
+                    preview = "\n" + PosNote._create_preview_single(
+                        terminal_width=terminal_width,
+                        src=src,
+                        line=line,
+                        column=column,
+                        found=found,
+                    )
+                elif pos[0] == pos[1]:
+                    line, column, found = PosNote._get_line_and_column(src, pos[0])
+                    out.append(f"At position {pos[0]} (line {line}, column {column})")
+                    preview = "\n" + PosNote._create_preview_single(
+                        terminal_width=terminal_width,
+                        src=src,
+                        line=line,
+                        column=column,
+                        found=found,
+                    )
+                else:
+                    line1, column1, found1 = PosNote._get_line_and_column(src, pos[0])
+                    out.append(f"From position {pos[0]} (line {line1}, column {column1})")
+                    line2, column2, found2 = PosNote._get_line_and_column(src, pos[1])
+                    out.append(f"To position {pos[1]} (line {line2}, column {column2})")
+                    if line1 == line2:
+                        preview = "\n" + PosNote._create_preview_range_oneline(
+                            terminal_width=terminal_width,
+                            src=src,
+                            line=line1,
+                            column1=column1,
+                            column2=column2,
+                            found=found1,
+                        )
+                    else:
+                        preview = "\n" + PosNote._create_preview_range_multiline(
+                            terminal_width=terminal_width,
+                            src=src,
+                            line1=line1,
+                            line2=line2,
+                            column1=column1,
+                            column2=column2,
+                            found1=found1,
+                            found2=found2,
+                        )
+        if not out:
+            return ""
+        if terminal_width is None:
+            return "| "+"\n| ".join(out) + preview
+        else:
+            terminal_width -= 2
+            return "| "+"\n| ".join(section for line in out for section in textwrap.wrap(line, terminal_width)) + preview
+    
+    def to_simple_str(
+        self,
+        *,
+        msg: str | None = None,
+        pos: int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> str:
+        if msg is None:
+            msg = self.msg
+        return msg + " (" + self.pos_to_simple_str(pos=pos, src=src, filename=filename) + ")"
+
+    def to_multiline_str(
+        self,
+        terminal_width: int | None = None,
+        *,
+        msg: str | None = None,
+        pos: int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> str:
+        if msg is None:
+            msg = self.msg
+        return msg + "\n" + self.pos_to_multiline_str(terminal_width, pos=pos, src=src, filename=filename)
+
+    @staticmethod
+    def _create_preview_single(
+        terminal_width: int | None,
+        src: str,
+        line: int,
+        column: int,
+        found: int,
+    ) -> str:
+        assert terminal_width is None or terminal_width >= 40
+        line_number_str = str(line)
+        empty_gutter = "| "+" "*len(line_number_str)+" | "
+        out = [
+            empty_gutter,
+            f"| {line_number_str} | ",
+            empty_gutter,
+        ]
+        if found == -1:
+            linestr = src
+        else:
+            linestr = src[found + 1 : src.find("\n", found + 1)]
+        realcol = column-1
+        if (
+            terminal_width is None or
+            (linelen := len(linestr)) <= (width := terminal_width-len(empty_gutter))
+        ):
+            # abc
+            out[1] += linestr
+            out[2] += " "*realcol + "^"
+        else:
+            two_thirds = width // 3 * 2
+            if realcol <= two_thirds:
+                # abc...
+                out[1] += linestr[:width-3]
+                out[2] += " "*realcol + "^" + " "*(width-realcol-4) + "..."
+            elif linelen-realcol <= two_thirds:
+                # ...abc
+                out[1] += "   " + linestr[width-3:]
+                out[2] += "..." + " "*(width-(linelen-realcol)-3) + "^"
+            else:
+                # ...abc...
+                dx = (width-6) // 2
+                out[1] += "   " + linestr[(realcol-dx):(realcol-dx)+(width-6)]
+                out[2] += "..." + " "*(dx) + "^" + " "*(width-dx-7) + "..."
+        return "\n".join(out)
+
+    @staticmethod
+    def _create_preview_range_oneline(
+        terminal_width: int | None,
+        src: str,
+        line: int,
+        column1: int,
+        column2: int,
+        found: int,
+    ) -> str:
+        assert terminal_width is None or terminal_width >= 40
+        line_number_str = str(line)
+        empty_gutter = "| "+" "*len(line_number_str)+" | "
+        out = [
+            empty_gutter,
+            f"| {line_number_str} | ",
+            empty_gutter,
+        ]
+        if found == -1:
+            linestr = src
+        else:
+            linestr = src[found + 1 : src.find("\n", found + 1)]
+        realcol1 = column1-1
+        realcol2 = column2-1
+        if (
+            terminal_width is None or
+            (linelen := len(linestr)) <= (width := terminal_width-len(empty_gutter))
+        ):
+            # abc
+            out[1] += linestr
+            out[2] += " "*realcol1 + "^"*(realcol2-realcol1)
+        else:
+            if realcol2-realcol1 <= width-10: # if the ends are sufficiently close together
+                if realcol2 <= width-5:
+                    # abc...
+                    out[1] += linestr[:width-3]
+                    out[2] += " "*realcol1 + "^"*(realcol2-realcol1) + " "*(width-realcol2-3) + "..."
+                elif linelen-realcol1 <= width-5:
+                    # ...abc
+                    out[1] += "   " + linestr[width-3:]
+                    out[2] += "..." + " "*(width-(linelen-realcol1)-3) + "^"*(realcol2-realcol1)
+                else:
+                    # ...abc...
+                    dx = (width - (realcol2-realcol1)) // 2
+                    out[1] += "   " + linestr[(realcol1-dx):(realcol1-dx)+(width-6)]
+                    out[2] += "..." + " "*dx + "^"*(realcol2-realcol1)
+            else:
+                if (extra := width - realcol1 - (linelen-realcol2) - 3) >= (width//4) >= 4:
+                    # abc...abc
+                    padding1 = extra // 2
+                    padding2 = extra - padding1
+                    out[1] += linestr[:realcol1+padding1] + "   " + linestr[realcol2-padding2:]
+                    out[2] += (
+                        " "*realcol1 +
+                        "^"*(padding1) +
+                        "..." +
+                        "^"*(padding2)
+                    )
+                elif realcol1 <= width//2-5:
+                    # abc...abc... (or maybe "abc...abc" sometimes idk)
+                    len1 = (width-6) // 2
+                    len2 = (width-6) - len1
+                    dx2 = len2//2
+                    out[1] += linestr[:len1] + "   " + linestr[(realcol2-dx2) : (realcol2-dx2)+len2]
+                    out[2] += (
+                        " "*realcol1 +
+                        "^"*(len1-realcol1) +
+                        "..." +
+                        "^"*dx2 +
+                        (" "*(len2-dx2) + "..." if (realcol2-dx2)+len2 < len(linestr) else "")
+                        # i'm not completely sure that the "abc...abc" condition failing asserts
+                        # that this one must end in a "...". this check is to make sure it
+                        # never incorrectly displays "..." when there is no continuation
+                    )
+                else:
+                    # ...abc...abc... ("...abc...abc" sometimes)
+                    len1 = (width-9) // 2
+                    len2 = (width-9) - len1
+                    dx1 = len1//2
+                    dx2 = len2//2
+                    out[1] += "   " + linestr[(realcol1-dx1) : (realcol1-dx1)+len1] + "   " + linestr[(realcol2-dx2) : (realcol2-dx2)+len2]
+                    out[2] += (
+                        "..." +
+                        " "*dx1 +
+                        "^"*(len1-dx1) +
+                        "..." +
+                        "^"*dx2 +
+                        (" "*(len2-dx2) + "..." if (realcol2-dx2)+len2 < len(linestr) else "")
+                    )
+        return "\n".join(out)
+
+    @staticmethod
+    def _create_preview_range_multiline(
+        terminal_width: int | None,
+        src: str,
+        line1: int,
+        line2: int,
+        column1: int,
+        column2: int,
+        found1: int,
+        found2: int,
+    ) -> str:
+        assert terminal_width is None or terminal_width >= 40
+        line_number_str1 = str(line1)
+        line_number_str2 = str(line2)
+        far_apart = line2-line1 > 1
+        line_number_len = max(len(line_number_str1), len(line_number_str2), 3 if far_apart else 0)
+        empty_gutter = "| "+" "*line_number_len +" | "
+        out = [
+            empty_gutter,
+            f"| {line_number_str1.rjust(line_number_len)} | ",
+            ("| " + "."*line_number_len + " | ") if far_apart else empty_gutter,
+            f"| {line_number_str2.rjust(line_number_len)} | ",
+            empty_gutter,
+        ]
+        assert found1 != -1 and found2 != -1
+        linestr1 = src[found1 + 1 : src.find("\n", found1 + 1)]
+        linestr2 = src[found2 + 1 : src.find("\n", found2 + 1)]
+        linelen1 = len(linestr1)
+        linelen2 = len(linestr2)
+        realcol1 = column1-1
+        realcol2 = column2-1
+
+        if terminal_width is None:
+            out[1] += linestr1
+            out[2] += " "*realcol1 + "^"*(linelen1-realcol1)
+            out[3] += linestr2
+            out[4] += "^"*realcol2
+        else:
+            width = terminal_width-len(empty_gutter)
+
+            if (linelen1 <= width):
+                # abc
+                out[1] += linestr1
+                out[2] += " "*realcol1 + "^"*(min(width, linelen1)-realcol1)
+            else:
+                two_thirds = width // 3 * 2
+                if realcol1 <= two_thirds:
+                    # abc...
+                    out[1] += linestr1[:width-3]
+                    out[2] += " "*realcol1 + "^"*(width-realcol1-3) + "..."
+                elif linelen1-realcol1 <= two_thirds:
+                    # ...abc
+                    out[1] += "   " + linestr1[width-3:]
+                    out[2] += "..." + " "*(width-(linelen1-realcol1)-3) + "^"*(linelen1-realcol1)
+                else:
+                    # ...abc...
+                    dx = (width-6) // 2
+                    out[1] += "   " + linestr1[(realcol1-dx):(realcol1-dx)+(width-6)]
+                    out[2] += "..." + " "*(dx) + "^"*(width-dx-6) + "..."
+
+            if (linelen2 <= width):
+                # abc
+                out[3] += linestr2
+                out[4] += "^"*realcol2
+            else:
+                two_thirds = width // 3 * 2
+                if realcol2 <= two_thirds:
+                    # abc...
+                    out[3] += linestr2[:width-3]
+                    out[4] += "^"*realcol2 + " "*(width-realcol2-3) + "..."
+                elif linelen1-realcol2 <= two_thirds:
+                    # ...abc
+                    out[3] += "   " + linestr2[width-3:]
+                    out[4] += "..." + "^"*(width-(linelen1-realcol2)-3)
+                else:
+                    # ...abc...
+                    dx = (width-6) // 2
+                    out[3] += "   " + linestr2[(realcol2-dx):(realcol2-dx)+(width-6)]
+                    out[4] += "..." + "^"*(dx) + " "*(width-dx-6) + "..."
+        return "\n".join(out)
+
+    # def get_line_and_column(self) -> None | tuple[int, int] | tuple[int, int, int, int]:
+    #     """
+    #     Gets the line and column number of the PosNote.
+
+    #     Line and column numbers start from 1. That is, the topmost line is considered line 1, and the rightmost position the cursor can be is considered column 1.
+
+    #     Returns one of these according to the position stored:
+    #     - `None` (if src or pos is None)
+    #     - `(line, column)`
+    #     - `(start_line, start_column, end_line, end_column)`
+    #     """
+    #     if self.pos is None or self.src is None:
+    #         return None
+    #     elif isinstance(self.pos, int):
+    #         return PosNote._get_line_and_column(self.src, self.pos)
+    #     else:
+    #         return (*PosNote._get_line_and_column(self.src, self.pos[0]), *PosNote._get_line_and_column(self.src, self.pos[1]))
+
+    @staticmethod
+    def _get_line_and_column(src: str, pos: int) -> tuple[int, int, int]:
+        """
+        Converts the `pos` position into line and column numbers using the `src` source string.
+
+        Line and column numbers start from 1. That is, the topmost line is considered line 1, and the rightmost position the cursor can be is considered column 1.
+
+        Returns `(line, column, found)`
+        """
+        pos = min(pos, len(src))
+        # column = pos - src.rfind("\n", 0, pos) # magically works even if it returns -1
+        # line = src.count("\n", 0, pos) + 1 # should still work with CRLF
+        found = src.rfind("\n", 0, pos)
+        if found == -1:
+            return 1, pos + 1, found
+        return src.count("\n", 0, pos) + 1, pos - found, found
+    
+    # @staticmethod
+    # def _clamp_string(
+    #     string: str,
+    #     current_pos: int,
+    # ) -> tuple[str, int]:
+    #     """
+    #     Returns the new clamped string, and the pointer position in that string.
+    #     """
+    #     if current_pos > PosNote.MAX_WIDTH-PosNote.LEFT_PADDING:
+    #         return (string[current_pos+PosNote.LEFT_PADDING-PosNote.MAX_WIDTH:current_pos+PosNote.LEFT_PADDING], PosNote.MAX_WIDTH-PosNote.LEFT_PADDING)
+    #     elif current_pos < PosNote.RIGHT_PADDING:
+    #         return (" "*(PosNote.RIGHT_PADDING-current_pos) + string[:PosNote.MAX_WIDTH-PosNote.RIGHT_PADDING-current_pos], PosNote.RIGHT_PADDING)
+    #     else:
+    #         return (string[:PosNote.MAX_WIDTH], current_pos)
+    
+    # @staticmethod
+    # def _clamp_string_get_start(
+    #     string: str,
+    #     current_pos: int,
+    # ) -> tuple[str, int, int]:
+    #     """
+    #     Returns the new clamped string, and the pointer position in that string, along with the start of the string if it got padded.
+    #     """
+    #     if current_pos > PosNote.MAX_WIDTH-PosNote.LEFT_PADDING:
+    #         return (string[current_pos+PosNote.LEFT_PADDING-PosNote.MAX_WIDTH:current_pos+PosNote.LEFT_PADDING], PosNote.MAX_WIDTH-PosNote.LEFT_PADDING, 0)
+    #     elif current_pos < PosNote.RIGHT_PADDING:
+    #         return (" "*(PosNote.RIGHT_PADDING-current_pos) + string[:PosNote.MAX_WIDTH-PosNote.RIGHT_PADDING-current_pos], PosNote.RIGHT_PADDING, (PosNote.RIGHT_PADDING-current_pos))
+    #     else:
+    #         return (string[:PosNote.MAX_WIDTH], current_pos, 0)
+    
+    # @staticmethod
+    # def _clamp_string_multiple(
+    #     string: str,
+    #     positions: Iterable[int],
+    # ) -> tuple[str, Iterable[int]] | None:
+    #     """
+    #     Returns the new clamped string, and the pointer positions in that string, or None if the positions can't fit.
+    #     """
+    #     min_pos = min(positions)
+    #     max_pos = max(positions)
+    #     if max_pos-min_pos > PosNote.MAX_WIDTH-PosNote.LEFT_PADDING-PosNote.RIGHT_PADDING:
+    #         return None
+    #     if max_pos > PosNote.MAX_WIDTH-PosNote.LEFT_PADDING:
+    #         return (
+    #             string[max_pos+PosNote.LEFT_PADDING-PosNote.MAX_WIDTH:max_pos+PosNote.LEFT_PADDING],
+    #             tuple(
+    #                 (PosNote.MAX_WIDTH-PosNote.LEFT_PADDING)-max_pos+pos
+    #                 for pos in positions
+    #             ),
+    #         )
+    #     elif min_pos < PosNote.RIGHT_PADDING:
+    #         return (
+    #             " "*(PosNote.RIGHT_PADDING-min_pos) + string[:PosNote.MAX_WIDTH-PosNote.RIGHT_PADDING-min_pos],
+    #             tuple(
+    #                 (PosNote.RIGHT_PADDING)-min_pos+pos
+    #                 for pos in positions
+    #             ),
+    #         )
+    #     else:
+    #         return (string[:PosNote.MAX_WIDTH], positions)
+
+    # @staticmethod
+    # def _convert_single_pos(src: str, line: int, col: int, *, indicator_char: str = "^") -> str | None:
+    #     """
+    #     For when the posititon is a single integer.
+
+    #     Line and column numbers start from 1.
+
+    #     If any of the following conditions are met, returns `None`.
+    #     - There aren't enough lines in the source.
+    #     - The line doesn't have enough characters.
+    #     """
+    #     real_line = line-1
+    #     real_col = col-1
+    #     lines = src.splitlines()
+    #     if real_line >= len(lines):
+    #         # There aren't enough lines in the source.
+    #         return None
+    #     line_str = lines[real_line]
+    #     if real_col >= len(line_str):
+    #         # The line doesn't have enough characters.
+    #         return None
+    #     string, pos = PosNote._clamp_string(line_str, real_col)
+    #     return f"{string}\n{' '*pos}{indicator_char}"
+
+    # @staticmethod
+    # def _convert_inline_range(
+    #     src: str,
+    #     line: int,
+    #     start_col: int,
+    #     end_col: int,
+    #     *,
+    #     indicator_char: str = "^",
+    # ) -> str | None:
+    #     """
+    #     For when the start and the end position is in one line.
+
+    #     Line and column numbers start from 1.
+
+    #     Make sure that:
+    #     - `end_col-start_col <= 60`
+
+    #     If any of the following conditions are met, returns `None`.
+    #     - There aren't enough lines in the source.
+    #     - The line doesn't have enough characters.
+    #     """
+    #     real_line = line-1
+    #     real_start_col = start_col-1
+    #     real_end_col = end_col-1
+    #     lines = src.splitlines()
+    #     if real_line >= len(lines):
+    #         # There aren't enough lines in the source.
+    #         return None
+    #     line_str = lines[real_line]
+    #     if real_start_col >= len(line_str) or real_end_col >= len(line_str):
+    #         # The line doesn't have enough characters.
+    #         return None
+    #     r = PosNote._clamp_string_multiple(line_str, (real_start_col, real_end_col))
+    #     if r is None:
+    #         return None
+    #     string, (start_pos, end_pos) = r
+    #     return f"{string}\n{' '*start_pos}{indicator_char*(end_pos-start_pos)}"
+
+    # @staticmethod
+    # def _convert_multiline_range(
+    #     src: str,
+    #     start_line: int,
+    #     start_col: int,
+    #     end_line: int,
+    #     end_col: int,
+    #     *,
+    #     indicator_char: str = "^",
+    # ) -> tuple[str, str] | None:
+    #     """
+    #     For when the start and the end position is not in one line, or the line is unreasonably long.
+
+    #     Line and column numbers start from 1.
+
+    #     If any of the following conditions are met, returns `None`.
+    #     - There aren't enough lines in the source.
+    #     - The line doesn't have enough characters.
+    #     """
+    #     real_start_line = start_line-1
+    #     real_start_col = start_col-1
+    #     real_end_line = end_line-1
+    #     real_end_col = end_col-1
+    #     lines = src.splitlines()
+    #     if real_start_line >= len(lines) or real_end_line >= len(lines):
+    #         # There aren't enough lines in the source.
+    #         return None
+    #     start_line_str = lines[real_start_line]
+    #     end_line_str = lines[real_end_line]
+    #     if real_start_col >= len(start_line_str) or real_end_col >= len(end_line_str):
+    #         # The line doesn't have enough characters.
+    #         return None
+    #     start_str, start_pos = PosNote._clamp_string(start_line_str, real_start_col)
+    #     end_str, end_pos, end_starting_col = PosNote._clamp_string_get_start(end_line_str, real_end_col)
+    #     return (
+    #         f"{start_str}\n{' '*start_pos}{indicator_char*(len(start_str)-start_pos)}",
+    #         f"{end_str}\n{' '*end_starting_col}{indicator_char*(end_pos-end_starting_col)}",
+    #     )
+
 
 class ParseFailure:
     """
@@ -423,12 +1079,12 @@ class StringIterator:
     
     def ws0(self) -> None:
         """Matches zero or more whitespaces."""
-        while self.peek(1) in const.WHITESPACES:
+        while self.peek(1) in constants.WHITESPACES:
             self.pos += 1
     
     def ws1(self) -> bool:
         """Matches one or more whitespaces. Returns a bool indicating whether or not the first whitespace was found."""
-        if self.peek(1) not in const.WHITESPACES:
+        if self.peek(1) not in constants.WHITESPACES:
             return False
         self.pos += 1
         self.ws0()
