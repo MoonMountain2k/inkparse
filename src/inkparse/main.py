@@ -3,13 +3,15 @@ The implementations of the main classes.
 """
 
 from __future__ import annotations
-from typing import overload, Any, Self, Literal, TypeVar, Generic, SupportsIndex, Final, Callable, Sequence, Protocol
+from typing import overload, Any, Self, Literal, TypeVar, Generic, SupportsIndex, Final, Callable, Sequence, Protocol, Never
 from types import TracebackType
 
 # from contextlib import contextmanager
 from collections.abc import Iterator, Iterable
 import re
 import textwrap
+from copy import copy
+import enum
 
 import inkparse.constants as constants
 
@@ -59,13 +61,23 @@ _DataCovT = TypeVar("_DataCovT", covariant=True)
 _TokenTypeCovT = TypeVar("_TokenTypeCovT", bound=str|None, covariant=True)
 
 
+class NoValType(enum.Enum):
+    NoVal = 0
+
+NoVal = NoValType.NoVal
+
 
 class Positioned(Protocol):
-    pos: int | tuple[int, int] | None
-    src: str | None
-    filename: str | None
+    @property
+    def pos(self) -> int | tuple[int, int] | None: ...
+    @property
+    def src(self) -> str | None: ...
+    @property
+    def filename(self) -> str | None: ...
 
-class PosNote(Positioned):
+
+# Positioned compatible
+class PosNote:
     """
     Positioned note.
     """
@@ -73,22 +85,22 @@ class PosNote(Positioned):
     @overload
     def __init__(
         self,
-        msg: str,
-        pos: int | tuple[int, int] | None = None,
-        src: str | None = None,
-        filename: str | None = None,
+        msg: str | None,
+        pos: Positioned,
     ) -> None: ...
 
     @overload
     def __init__(
         self,
-        msg: str,
-        pos: Positioned,
+        msg: str | None = None,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
     ) -> None: ...
 
     def __init__(
         self,
-        msg: str,
+        msg: str | None = None,
         pos: Positioned | int | tuple[int, int] | None = None,
         src: str | None = None,
         filename: str | None = None,
@@ -96,10 +108,7 @@ class PosNote(Positioned):
         """
         All parameters are optional.
         """
-        self.msg: str = msg
-        self.pos: int | tuple[int, int] | None
-        self.src: str | None
-        self.filename: str | None
+        self.msg: str | None = msg
         if pos is None or isinstance(pos, (int, tuple)):
             self.pos = pos
             self.src = src
@@ -108,36 +117,6 @@ class PosNote(Positioned):
             self.pos = pos.pos
             self.src = pos.src
             self.filename = pos.filename
-
-    @property
-    def pos_start(self) -> int | None:
-        if self.pos is None:
-            return None
-        elif isinstance(self.pos, int):
-            return self.pos
-        else:
-            return self.pos[0]
-
-    @pos_start.setter
-    def pos_start(self, new: int) -> None:
-        if isinstance(self.pos, tuple):
-            self.pos = (new, self.pos[1])
-        else:
-            self.pos = new
-
-    @property
-    def pos_end(self) -> int | None:
-        if isinstance(self.pos, tuple):
-            return self.pos[1]
-        else:
-            return None
-
-    @pos_end.setter
-    def pos_end(self, new: int) -> None:
-        if isinstance(self.pos, tuple):
-            self.pos = (self.pos[0], new)
-        else:
-            self.pos = (new, new)
 
     def pos_to_simple_str(
         self,
@@ -270,6 +249,8 @@ class PosNote(Positioned):
     ) -> str:
         if msg is None:
             msg = self.msg
+        if msg is None:
+            msg = "Unknown error."
         return msg + " (" + self.pos_to_simple_str(pos=pos, src=src, filename=filename) + ")"
 
     def to_multiline_str(
@@ -283,6 +264,8 @@ class PosNote(Positioned):
     ) -> str:
         if msg is None:
             msg = self.msg
+        if msg is None:
+            msg = "Unknown error."
         return msg + "\n" + self.pos_to_multiline_str(terminal_width, pos=pos, src=src, filename=filename)
 
     @staticmethod
@@ -501,24 +484,6 @@ class PosNote(Positioned):
                     out[4] += "..." + "^"*(dx) + " "*(width-dx-6) + "..."
         return "\n".join(out)
 
-    # def get_line_and_column(self) -> None | tuple[int, int] | tuple[int, int, int, int]:
-    #     """
-    #     Gets the line and column number of the PosNote.
-
-    #     Line and column numbers start from 1. That is, the topmost line is considered line 1, and the rightmost position the cursor can be is considered column 1.
-
-    #     Returns one of these according to the position stored:
-    #     - `None` (if src or pos is None)
-    #     - `(line, column)`
-    #     - `(start_line, start_column, end_line, end_column)`
-    #     """
-    #     if self.pos is None or self.src is None:
-    #         return None
-    #     elif isinstance(self.pos, int):
-    #         return PosNote._get_line_and_column(self.src, self.pos)
-    #     else:
-    #         return (*PosNote._get_line_and_column(self.src, self.pos[0]), *PosNote._get_line_and_column(self.src, self.pos[1]))
-
     @staticmethod
     def _get_line_and_column(src: str, pos: int) -> tuple[int, int, int]:
         """
@@ -535,171 +500,10 @@ class PosNote(Positioned):
         if found == -1:
             return 1, pos + 1, found
         return src.count("\n", 0, pos) + 1, pos - found, found
-    
-    # @staticmethod
-    # def _clamp_string(
-    #     string: str,
-    #     current_pos: int,
-    # ) -> tuple[str, int]:
-    #     """
-    #     Returns the new clamped string, and the pointer position in that string.
-    #     """
-    #     if current_pos > PosNote.MAX_WIDTH-PosNote.LEFT_PADDING:
-    #         return (string[current_pos+PosNote.LEFT_PADDING-PosNote.MAX_WIDTH:current_pos+PosNote.LEFT_PADDING], PosNote.MAX_WIDTH-PosNote.LEFT_PADDING)
-    #     elif current_pos < PosNote.RIGHT_PADDING:
-    #         return (" "*(PosNote.RIGHT_PADDING-current_pos) + string[:PosNote.MAX_WIDTH-PosNote.RIGHT_PADDING-current_pos], PosNote.RIGHT_PADDING)
-    #     else:
-    #         return (string[:PosNote.MAX_WIDTH], current_pos)
-    
-    # @staticmethod
-    # def _clamp_string_get_start(
-    #     string: str,
-    #     current_pos: int,
-    # ) -> tuple[str, int, int]:
-    #     """
-    #     Returns the new clamped string, and the pointer position in that string, along with the start of the string if it got padded.
-    #     """
-    #     if current_pos > PosNote.MAX_WIDTH-PosNote.LEFT_PADDING:
-    #         return (string[current_pos+PosNote.LEFT_PADDING-PosNote.MAX_WIDTH:current_pos+PosNote.LEFT_PADDING], PosNote.MAX_WIDTH-PosNote.LEFT_PADDING, 0)
-    #     elif current_pos < PosNote.RIGHT_PADDING:
-    #         return (" "*(PosNote.RIGHT_PADDING-current_pos) + string[:PosNote.MAX_WIDTH-PosNote.RIGHT_PADDING-current_pos], PosNote.RIGHT_PADDING, (PosNote.RIGHT_PADDING-current_pos))
-    #     else:
-    #         return (string[:PosNote.MAX_WIDTH], current_pos, 0)
-    
-    # @staticmethod
-    # def _clamp_string_multiple(
-    #     string: str,
-    #     positions: Iterable[int],
-    # ) -> tuple[str, Iterable[int]] | None:
-    #     """
-    #     Returns the new clamped string, and the pointer positions in that string, or None if the positions can't fit.
-    #     """
-    #     min_pos = min(positions)
-    #     max_pos = max(positions)
-    #     if max_pos-min_pos > PosNote.MAX_WIDTH-PosNote.LEFT_PADDING-PosNote.RIGHT_PADDING:
-    #         return None
-    #     if max_pos > PosNote.MAX_WIDTH-PosNote.LEFT_PADDING:
-    #         return (
-    #             string[max_pos+PosNote.LEFT_PADDING-PosNote.MAX_WIDTH:max_pos+PosNote.LEFT_PADDING],
-    #             tuple(
-    #                 (PosNote.MAX_WIDTH-PosNote.LEFT_PADDING)-max_pos+pos
-    #                 for pos in positions
-    #             ),
-    #         )
-    #     elif min_pos < PosNote.RIGHT_PADDING:
-    #         return (
-    #             " "*(PosNote.RIGHT_PADDING-min_pos) + string[:PosNote.MAX_WIDTH-PosNote.RIGHT_PADDING-min_pos],
-    #             tuple(
-    #                 (PosNote.RIGHT_PADDING)-min_pos+pos
-    #                 for pos in positions
-    #             ),
-    #         )
-    #     else:
-    #         return (string[:PosNote.MAX_WIDTH], positions)
-
-    # @staticmethod
-    # def _convert_single_pos(src: str, line: int, col: int, *, indicator_char: str = "^") -> str | None:
-    #     """
-    #     For when the posititon is a single integer.
-
-    #     Line and column numbers start from 1.
-
-    #     If any of the following conditions are met, returns `None`.
-    #     - There aren't enough lines in the source.
-    #     - The line doesn't have enough characters.
-    #     """
-    #     real_line = line-1
-    #     real_col = col-1
-    #     lines = src.splitlines()
-    #     if real_line >= len(lines):
-    #         # There aren't enough lines in the source.
-    #         return None
-    #     line_str = lines[real_line]
-    #     if real_col >= len(line_str):
-    #         # The line doesn't have enough characters.
-    #         return None
-    #     string, pos = PosNote._clamp_string(line_str, real_col)
-    #     return f"{string}\n{' '*pos}{indicator_char}"
-
-    # @staticmethod
-    # def _convert_inline_range(
-    #     src: str,
-    #     line: int,
-    #     start_col: int,
-    #     end_col: int,
-    #     *,
-    #     indicator_char: str = "^",
-    # ) -> str | None:
-    #     """
-    #     For when the start and the end position is in one line.
-
-    #     Line and column numbers start from 1.
-
-    #     Make sure that:
-    #     - `end_col-start_col <= 60`
-
-    #     If any of the following conditions are met, returns `None`.
-    #     - There aren't enough lines in the source.
-    #     - The line doesn't have enough characters.
-    #     """
-    #     real_line = line-1
-    #     real_start_col = start_col-1
-    #     real_end_col = end_col-1
-    #     lines = src.splitlines()
-    #     if real_line >= len(lines):
-    #         # There aren't enough lines in the source.
-    #         return None
-    #     line_str = lines[real_line]
-    #     if real_start_col >= len(line_str) or real_end_col >= len(line_str):
-    #         # The line doesn't have enough characters.
-    #         return None
-    #     r = PosNote._clamp_string_multiple(line_str, (real_start_col, real_end_col))
-    #     if r is None:
-    #         return None
-    #     string, (start_pos, end_pos) = r
-    #     return f"{string}\n{' '*start_pos}{indicator_char*(end_pos-start_pos)}"
-
-    # @staticmethod
-    # def _convert_multiline_range(
-    #     src: str,
-    #     start_line: int,
-    #     start_col: int,
-    #     end_line: int,
-    #     end_col: int,
-    #     *,
-    #     indicator_char: str = "^",
-    # ) -> tuple[str, str] | None:
-    #     """
-    #     For when the start and the end position is not in one line, or the line is unreasonably long.
-
-    #     Line and column numbers start from 1.
-
-    #     If any of the following conditions are met, returns `None`.
-    #     - There aren't enough lines in the source.
-    #     - The line doesn't have enough characters.
-    #     """
-    #     real_start_line = start_line-1
-    #     real_start_col = start_col-1
-    #     real_end_line = end_line-1
-    #     real_end_col = end_col-1
-    #     lines = src.splitlines()
-    #     if real_start_line >= len(lines) or real_end_line >= len(lines):
-    #         # There aren't enough lines in the source.
-    #         return None
-    #     start_line_str = lines[real_start_line]
-    #     end_line_str = lines[real_end_line]
-    #     if real_start_col >= len(start_line_str) or real_end_col >= len(end_line_str):
-    #         # The line doesn't have enough characters.
-    #         return None
-    #     start_str, start_pos = PosNote._clamp_string(start_line_str, real_start_col)
-    #     end_str, end_pos, end_starting_col = PosNote._clamp_string_get_start(end_line_str, real_end_col)
-    #     return (
-    #         f"{start_str}\n{' '*start_pos}{indicator_char*(len(start_str)-start_pos)}",
-    #         f"{end_str}\n{' '*end_starting_col}{indicator_char*(end_pos-end_starting_col)}",
-    #     )
 
 
-class ParseFailure:
+
+class ParseFailureBase:
     """
     When returned from a parser function, indicates that it has failed. Can be converted into a `ParseError`.
 
@@ -712,91 +516,144 @@ class ParseFailure:
     ```
     """
 
-    def __init__(self, src: str, pos: int, msg: str | None = None, notes: list[PosNote] = []) -> None:
-        """
-        `src`: The string that was being parsed.
-        `pos`: The position of the failure.
-        `msg`: The reason for the failure.
-        `notes`: Positioned notes to add to the error. Should be in reverse order. That is, the note that's last in the list will be shown above the other notes.
-        """
-        self.src: str = src
-        self.pos: int = pos
-        self.msg: str | None = msg
+    def __init__(
+        self,
+        msg: str | None = None,
+        notes: list[PosNote] = [],
+    ) -> None:
+        self.msg = msg
         self.notes: list[PosNote] = notes
-        """Should be in reverse order. That is, the note that's last in the list will be shown above the other notes."""
 
-    def prepend_notes(self, notes: list[PosNote]) -> Self:
+    def append_existing(self, note: PosNote | list[PosNote]) -> Self:
+        """Appends a note or notes to the bottom of the notes."""
+        if isinstance(note, list):
+            self.notes += note
+        else:
+            self.notes.append(note)
+        return self
+
+    @overload
+    def append_pos_note(
+        self,
+        msg: str | None,
+        pos: Positioned,
+    ) -> Self: ...
+
+    @overload
+    def append_pos_note(
+        self,
+        msg: str | None = None,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> Self: ...
+
+    def append_pos_note(
+        self,
+        msg: str | None = None,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> Self:
+        """Appends a note to the bottom of the notes."""
+        self.notes.append(PosNote(msg, pos, src, filename))
+        return self
+
+    def copy(
+        self,
+        msg: str | None = None,
+        notes: list[PosNote] = [],
+    ) -> Self:
+        return type(self)(msg if msg is not None else self.msg, notes if notes is not None else copy(self.notes))
+
+    def with_existing(self, note: PosNote | list[PosNote]) -> Self:
         """
-        Appends notes to the top of the other notes.
-        
-        The given notes should be in reverse order. That is, the note that's last in the list will be shown above the other notes.
+        `append_existing` but it returns a copy.
         """
-        self.notes = notes + self.notes
-        return self
+        if isinstance(note, list):
+            return self.copy(notes = self.notes + note)
+        else:
+            return self.copy(notes = self.notes + [note])
 
-    def prepend_pos_note(self, pos: int, msg: str | None = None) -> Self:
-        """Appends a note to the top of the other notes."""
-        self.notes.append(PosNote(pos, msg))
-        return self
+    @overload
+    def with_pos_note(
+        self,
+        msg: str | None,
+        pos: Positioned,
+    ) -> Self: ...
 
-    def prepend_existing_note(self, note: PosNote) -> Self:
-        """Appends a note to the top of the other notes."""
-        self.notes.append(note)
-        return self
+    @overload
+    def with_pos_note(
+        self,
+        msg: str | None = None,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> Self: ...
+
+    def with_pos_note(
+        self,
+        msg: str | None = None,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> Self:
+        """
+        `add_pos_note` but it returns a copy.
+        """
+        return self.copy(notes = self.notes + [PosNote(msg, pos, src, filename)])
+
+    def with_existing_pos_note(self, note: PosNote) -> Self:
+        """
+        `add_existing_pos_note` but it returns a copy.
+        """
+        return self.copy(notes = self.notes + [note])
 
     def error(self) -> ParseError:
         """Converts this to a ParseError."""
-        return ParseError(self.src, self.pos, self.msg, self.notes)
+        return ParseError(self.msg, self.notes)
+
+    def failure(self) -> ParseFailure:
+        """Converts this to a ParseFailure."""
+        return ParseFailure(self.msg, self.notes)
 
     def __bool__(self) -> Literal[False]:
         return False
 
-class ParseError(Exception):
+class ParseFailure(ParseFailureBase):
+    pass
+
+class ParseError(ParseFailureBase, Exception):
     """
     The exception that's raised when a parser encounters an unrecoverable error.
 
     Usually used for syntax errors.
     """
 
-    def __init__(self, src: str, pos: int, msg: str | None = None, notes: list[PosNote] = []) -> None:
-        """
-        `src`: The string that was being parsed.
-        `pos`: The position of the error.
-        `msg`: The reason for the error.
-        `notes`: Positioned notes to add to the error. Should be in reverse order. That is, the note that's last in the list will be shown above the other notes.
-        """
+    def __init__(
+        self,
+        msg: str | None = None,
+        notes: list[PosNote] = [],
+    ) -> None:
         if msg is None:
-            super().__init__()
+            Exception.__init__(self)
         else:
-            super().__init__(msg)
-        self.src = src
-        self.append_pos_note(pos)
-        for note in reversed(notes):
-            self.append_existing_note(note)
+            Exception.__init__(self, msg)
+        ParseFailureBase.__init__(self, msg, notes)
 
-    def append_pos_note(self, pos: int, msg: str | None = None) -> Self:
-        note: list[str] = [] if msg is None else [msg]
+    def add_note(self, note: str) -> None:
+        """Does nothing. This would add a note to exceptions normally, but this exception replaces the behavior."""
+        pass
 
-        pos = min(pos, len(self.src))
-        # should still work with CRLF
-        line = self.src.count("\n", 0, pos) + 1
-        column = pos - self.src.rfind("\n", 0, pos) # magically works even when it returns -1
-        note.append(f"At position {pos} (line {line}, column {column})")
+    @property
+    def __notes__(self) -> list[str]:
+        return [note.to_multiline_str() for note in self.notes]
+    @__notes__.setter
+    def __notes__(self) -> None:
+        pass
 
-        lines = self.src.splitlines()
-        if len(lines) > line-1:
-            line_str = lines[line-1]
-            if len(line_str) >= column:
-                if column <= 20:
-                    note.append(f"{line_str[:40]}\n{' '*(column-1)}^")
-                else:
-                    note.append(f"{line_str[(column-20):(column+20)]}\n{' '*20}^")
-        self.add_note("\n".join(note))
-        return self
-    
-    def append_existing_note(self, note: PosNote) -> Self:
-        return self.append_pos_note(note.pos, note.msg)
 
+# Positioned compatible
 class Token(Generic[_TokenTypeCovT]):
     """
     When returned from a parser function, indicates that it has succeeded.
@@ -813,17 +670,54 @@ class Token(Generic[_TokenTypeCovT]):
     
     Example: `Token[Literal["integer"]]` `Token[str]`
     """
-    def __init__(self, token_type: _TokenTypeCovT, pos: tuple[int, int] | None = None, subtokens: list[Token] = []) -> None:
+
+    @overload
+    def __init__(
+        self,
+        token_type: _TokenTypeCovT,
+        pos: Positioned,
+        *,
+        subtokens: list[Token] = [],
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        token_type: _TokenTypeCovT,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+        subtokens: list[Token] = [],
+    ) -> None: ...
+
+    def __init__(
+        self,
+        token_type: _TokenTypeCovT,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+        subtokens: list[Token] = [],
+    ) -> None:
         """
         `token_type` can either be a string or None.
         """
         self.token_type: Final[_TokenTypeCovT] = token_type
-        self.pos: Final[tuple[int, int] | None] = pos
         self.subtokens: list[Token] = subtokens
+        self.pos: int | tuple[int, int] | None
+        self.src: str | None
+        self.filename: str | None
+        if pos is None or isinstance(pos, (int, tuple)):
+            self.pos = pos
+            self.src = src
+            self.filename = filename
+        else:
+            self.pos = pos.pos
+            self.src = pos.src
+            self.filename = pos.filename
 
     def with_type(self, token_type: _TokenTypeT) -> Token[_TokenTypeT]:
         """Creates a copy of this token with the provided token type."""
-        return Token(token_type, self.pos, self.subtokens)
+        return Token(token_type, self.pos, self.src, self.filename, self.subtokens)
 
     def __bool__(self) -> Literal[True]:
         return True
@@ -846,17 +740,28 @@ class Token(Generic[_TokenTypeCovT]):
         raise KeyError
 
     def __repr__(self) -> str:
+        if self.pos is None:
+            pos_start, pos_end = None, None
+        elif isinstance(self.pos, int):
+            pos_start, pos_end = self.pos, None
+        elif self.pos[0] == self.pos[1]:
+            pos_start, pos_end = self.pos[0], None
+        else:
+            pos_start, pos_end = self.pos
         return (
             (
                 f"<{self.token_type}>"
-                if self.pos is None else
-                f"<{self.token_type} {self.pos[0]}..{self.pos[1]}>"
+                if pos_start is None else
+                f"<{self.token_type} {pos_start}>"
+                if pos_end is None else
+                f"<{self.token_type} {pos_start}..{pos_end}>"
             )
             + (
                 (" [" + (" ".join(repr(token) for token in self.subtokens)) + "]") if self.subtokens else ""
             )
         )
 
+# Positioned compatible
 class Result(Token, Generic[_DataCovT, _TokenTypeCovT]):
     """
     When returned from a parser function, indicates that it has succeeded. Can also contain data.
@@ -873,13 +778,42 @@ class Result(Token, Generic[_DataCovT, _TokenTypeCovT]):
     
     Example: `Result[int, Literal["integer"]]` `Result[int, str]`
     """
-    def __init__(self, data: _DataCovT, token_type: _TokenTypeCovT, pos: tuple[int, int] | None = None, subtokens: list[Token] = []) -> None:
-        super().__init__(token_type, pos, subtokens)
+    @overload
+    def __init__(
+        self,
+        data: _DataCovT,
+        token_type: _TokenTypeCovT,
+        pos: Positioned,
+        *,
+        subtokens: list[Token] = [],
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        data: _DataCovT,
+        token_type: _TokenTypeCovT,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+        subtokens: list[Token] = [],
+    ) -> None: ...
+
+    def __init__(
+        self,
+        data: _DataCovT,
+        token_type: _TokenTypeCovT,
+        pos: Positioned | int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+        subtokens: list[Token] = [],
+    ) -> None:
+        super().__init__(token_type, pos, src, filename, subtokens)
         self.data: _DataCovT = data
 
     def with_type(self, token_type: _TokenTypeT) -> Result[_DataCovT, _TokenTypeT]:
         """Creates a copy of this result with the provided token type."""
-        return Result(self.data, token_type, self.pos, self.subtokens)
+        return Result(self.data, token_type, self.pos, self.src, self.filename, self.subtokens)
 
     def __repr__(self) -> str:
         return (
@@ -888,13 +822,14 @@ class Result(Token, Generic[_DataCovT, _TokenTypeCovT]):
         )
 
 
-
+# Positioned compatible
 class StringIterator:
-    def __init__(self, src: str, starting_pos: int = 0) -> None:
-        self.src: str = src
+    def __init__(self, src: str, starting_pos: int = 0, filename: str | None = None) -> None:
+        self.src: Final[str] = src
         """The string that's being parsed."""
         self.pos: int = starting_pos
         """The current position."""
+        self.filename: Final[str | None] = filename
 
     def __len__(self) -> int:
         return len(self.src)
@@ -975,6 +910,65 @@ class StringIterator:
     def save(self) -> Savepoint:
         """Saves the current position as a `Savepoint` and returns it."""
         return Savepoint(self)
+
+    def guard(self, value: _T, condition: bool | None = None) -> _T:
+        """
+        Same as `si.save().guard(...)` but doesn't actually create a `Savepoint`.
+        """
+        pos = self.pos
+        if condition is None:
+            if not value:
+                self.pos = pos
+        else:
+            if not condition:
+                self.pos = pos
+        return value
+    
+    @overload
+    def get_token(self) -> Token[None]: ...
+    @overload
+    def get_token(self, token_type: _TokenTypeT) -> Token[_TokenTypeT]: ...
+
+    def get_token(self, token_type: _TokenTypeT | None = None) -> Token[_TokenTypeT | None]:
+        """
+        Creates a `Token` object.
+        """
+        return Token(token_type, self)
+
+    @overload
+    def get_result(self, data: _DataT) -> Result[_DataT, None]: ...
+    @overload
+    def get_result(self, data: _DataT, token_type: _TokenTypeT) -> Result[_DataT, _TokenTypeT]: ...
+
+    def get_result(self, data: _DataT, token_type: _TokenTypeT | None = None) -> Result[_DataT, _TokenTypeT | None]:
+        """Creates a `Result` object."""
+        return Result(data, token_type, self)
+
+    def get_note(self, msg: str | None = None) -> PosNote:
+        """Creates a `PosNote`."""
+        return PosNote(msg, self)
+
+    def get_error(self, msg: str | None = None) -> ParseError:
+        """Creates a `ParseError` and notes the current position."""
+        return ParseError(msg).append_pos_note(None, self)
+        # do not include self.notes, as it's supposed to be added by __exit__().
+
+    def get_fail(self, msg: str | None = None) -> ParseFailure:
+        """Creates a `ParseFailure` and notes the current position."""
+        return ParseFailure(msg).append_pos_note(None, self)
+    
+    def inverted_guard(self, value: _T, condition: bool | None = None) -> _T:
+        """
+        Like `guard()` but rolls back if it's true instead.
+        """
+        pos = self.pos
+        if condition is None:
+            if value:
+                self.pos = pos
+        else:
+            if condition:
+                self.pos = pos
+        return value
 
     def character(self, value: str) -> bool:
         """
@@ -1171,8 +1165,112 @@ class StringIterator:
 
             revert()
 
+# Positioned compatible
+class CheckpointBase:
+    @property
+    def src(self) -> str:
+        return self.si.src
 
-class Savepoint:
+    @property
+    def filename(self) -> str | None:
+        return self.si.filename
+
+    @property
+    def pos(self) -> tuple[int, int]:
+        return (self.start_pos, self.si.pos)
+
+    def __init__(self, si: StringIterator) -> None:
+        self.start_pos: Final[int] = si.pos
+        self.si: Final[StringIterator] = si
+
+    def rollback(self) -> None:
+        """Rolls back the iterator to the starting position. (Regardless of the checkpoint being commited or not.)"""
+        self.si.pos = self.start_pos
+    
+    def get_string(self) -> str:
+        return self.si.src[self.start_pos : self.si.pos]
+
+    @overload
+    def get_token(self) -> Token[None]: ...
+    @overload
+    def get_token(self, token_type: _TokenTypeT) -> Token[_TokenTypeT]: ...
+
+    def get_token(self, token_type: _TokenTypeT | None = None) -> Token[_TokenTypeT | None]:
+        """
+        Creates a `Token` object.
+        
+        Uses the checkpoint's saved position as the start, and the current iterator position as the end position of the token.
+        """
+        return Token(token_type, self)
+
+    @overload
+    def get_result(self, data: _DataT) -> Result[_DataT, None]: ...
+    @overload
+    def get_result(self, data: _DataT, token_type: _TokenTypeT) -> Result[_DataT, _TokenTypeT]: ...
+
+    def get_result(self, data: _DataT, token_type: _TokenTypeT | None = None) -> Result[_DataT, _TokenTypeT | None]:
+        """
+        Creates a `Result` object.
+        
+        Uses the checkpoint's saved position as the start, and the current iterator position as the end position of the result.
+        """
+        return Result(data, token_type, self)
+
+    def get_note(self, msg: str | None = None) -> PosNote:
+        """Creates a `PosNote`."""
+        return PosNote(msg, self)
+
+    def get_error(self, msg: str | None = None) -> ParseError:
+        """Creates a `ParseError` and notes the position range from the checkpoint start to the current position."""
+        return ParseError(msg).append_pos_note(None, self)
+        # do not include self.notes, as it's supposed to be added by __exit__().
+
+    def get_fail(self, msg: str | None = None) -> ParseFailure:
+        """Creates a `ParseFailure` and notes the position range from the checkpoint start to the current position."""
+        return ParseFailure(msg).append_pos_note(None, self)
+    
+    def guard(self, value: _T, condition: bool | None = None) -> _T:
+        """
+        Rolls back the checkpoint if the `condition` parameter is `None` and the `value` is falsy, or the `condition` parameter is false.
+
+        Returns the `value` as-is.
+
+        Common usage method:
+
+        ```
+        si.save().guard(si.literal("test"))
+        si.guard(si.literal("test"))
+        ```
+        """
+        if condition is None:
+            if not value:
+                self.si.pos = self.start_pos
+        else:
+            if not condition:
+                self.si.pos = self.start_pos
+        return value
+    
+    def inverted_guard(self, value: _T, condition: bool | None = None) -> _T:
+        """
+        Like `guard()` but rolls back if it's true instead.
+        """
+        if condition is None:
+            if value:
+                self.si.pos = self.start_pos
+        else:
+            if condition:
+                self.si.pos = self.start_pos
+        return value
+    
+    def rollback_inline(self, value: _T) -> _T:
+        """
+        Rolls back and returns the parameter as-is.
+        """
+        self.si.pos = self.start_pos
+        return value
+
+# Positioned compatible
+class Savepoint(CheckpointBase):
     """
     A simplified and faster version of `Checkpoint`.
 
@@ -1180,65 +1278,11 @@ class Savepoint:
 
     No concept of committing and automatic rollbacks.
     """
-    def __init__(self, si: StringIterator) -> None:
-        self.pos: Final[int] = si.pos
-        self.si: Final[StringIterator] = si
-
     def __call__(self) -> None:
-        """Same as `Savepoint.rollback()`."""
-        self.si.pos = self.pos
-
-    def rollback(self) -> None:
-        """Same as `Savepoint.__call__()`."""
-        self.si.pos = self.pos
-
-    def get_range(self) -> tuple[int, int]:
-        return (self.pos, self.si.pos)
-    
-    def get_string(self) -> str:
-        return self.si.src[self.pos : self.si.pos]
-    
-    def guard(self, value: _T) -> _T:
-        """
-        If the parameter is `False` or falsy, rolls back the checkpoint.
-        
-        Returns the parameter as-is.
-
-        Common usage method:
-        ```
-        si.save().guard(si.literal("test"))
-        ```
-        """
-        if not value:
-            self.rollback()
-        return value
-    
-    def inverted_guard(self, value: _T) -> _T:
-        """
-        If the parameter is `True` or true-y, rolls back the checkpoint.
-        
-        Returns the parameter as-is.
-
-        Common usage method:
-        ```
-        si.save().inverted_guard(si.literal("test"))
-        ```
-        """
-        if value:
-            self.rollback()
-        return value
-    
-    def rollback_inline(self, value: _T) -> _T:
-        """
-        Always rolls back.
-        
-        Returns the parameter as-is.
-        """
         self.rollback()
-        return value
 
-
-class Checkpoint:
+# Positioned compatible
+class Checkpoint(CheckpointBase):
     """
     Used as a context manager:
     ```
@@ -1261,20 +1305,26 @@ class Checkpoint:
         raise c.error("Error reason.")          # Irrecoverable error
     ```
     """
+
+    @property
+    def reversed_notes(self) -> list[PosNote]:
+        return list(reversed(self.notes))
+
     def __init__(self, si: StringIterator, *, parent_checkpoint: Checkpoint | None = None, note: str | None = None) -> None:
         """
         Create using `StringIterator.checkpoint()` or `StringIterator.__call__()` instead.
         """
-        self.pos: Final[int] = si.pos
-        """The saved position."""
-        self.si: Final[StringIterator] = si
-        """The bound StringIterator."""
+        super().__init__(si)
         self.parent_checkpoint: Final[Checkpoint | None] = parent_checkpoint
 
         self.subtokens: list[Token] = []
         """The tokens to add as subtokens to the resulting `Token`."""
         self.notes: list[PosNote] = []
-        """The notes to add to the resulting `ParseError` or `ParseFailure`."""
+        """
+        The notes to append to the resulting `ParseError` or `ParseFailure`.
+        
+        These notes are in reverse order. (It'll be reversed before being appended to the error.)
+        """
         self.committed: bool = False
         """Use `is_committed()` to check if it's committed."""
 
@@ -1284,7 +1334,7 @@ class Checkpoint:
 
     def restart(self) -> None:
         """Rolls back and reverts all the data of the checkpoint to the starting configuration."""
-        self.si.pos = self.pos
+        self.si.pos = self.start_pos
         self.subtokens = []
         self.notes = []
         self.committed = False
@@ -1304,14 +1354,10 @@ class Checkpoint:
         """Checks if this is committed. Works with sub-checkpoints."""
         return self.committed or (self.parent_checkpoint is not None and self.parent_checkpoint.is_committed())
 
-    def rollback(self) -> None:
-        """Rolls back the iterator to the starting position. (Regardless of the checkpoint being commited or not.)"""
-        self.si.pos = self.pos
-
     def rollback_if_uncommited(self) -> None:
-        """Rolls back the iterator to the starting position if the checkpoint isn't committed."""
+        """Rolls back if the checkpoint isn't committed."""
         if not self.is_committed():
-            self.si.pos = self.pos
+            self.si.pos = self.start_pos
 
     def subtoken(self, token: Token) -> None:
         """
@@ -1325,13 +1371,7 @@ class Checkpoint:
 
         Uses the position of the `StringIterator`.
         """
-        self.notes.append(PosNote(self.si.pos, msg))
-
-    def get_range(self) -> tuple[int, int]:
-        return (self.pos, self.si.pos)
-    
-    def get_string(self) -> str:
-        return self.si.src[self.pos : self.si.pos]
+        self.notes.append(PosNote(msg, self))
 
     @overload
     def get_token(self) -> Token[None]: ...
@@ -1340,11 +1380,11 @@ class Checkpoint:
 
     def get_token(self, token_type: _TokenTypeT | None = None) -> Token[_TokenTypeT | None]:
         """
-        Returns a `Token` object without committing.
+        Creates a `Token` object without committing.
         
         Uses the checkpoint's saved position as the start, and the current iterator position as the end position of the token.
         """
-        return Token(token_type, self.get_range(), subtokens=self.subtokens)
+        return Token(token_type, self, subtokens=self.subtokens)
 
     @overload
     def get_result(self, data: _DataT) -> Result[_DataT, None]: ...
@@ -1353,11 +1393,11 @@ class Checkpoint:
 
     def get_result(self, data: _DataT, token_type: _TokenTypeT | None = None) -> Result[_DataT, _TokenTypeT | None]:
         """
-        Returns a `Result` object without committing.
+        Creates a `Result` object without committing.
         
         Uses the checkpoint's saved position as the start, and the current iterator position as the end position of the result.
         """
-        return Result(data, token_type, self.get_range(), subtokens=self.subtokens)
+        return Result(data, token_type, self, subtokens=self.subtokens)
 
     @overload
     def token(self) -> Token[None]: ...
@@ -1371,7 +1411,7 @@ class Checkpoint:
         Uses the checkpoint's saved position as the start, and the current iterator position as the end position of the token.
         """
         self.committed = True
-        return Token(token_type, self.get_range(), subtokens=self.subtokens)
+        return Token(token_type, self, subtokens=self.subtokens)
 
     @overload
     def result(self, data: _DataT) -> Result[_DataT, None]: ...
@@ -1385,35 +1425,78 @@ class Checkpoint:
         Uses the checkpoint's saved position as the start, and the current iterator position as the end position of the result.
         """
         self.committed = True
-        return Result(data, token_type, self.get_range(), subtokens=self.subtokens)
+        return Result(data, token_type, self, subtokens=self.subtokens)
 
-    def error(self, msg: str | None = None, notes: list[PosNote] = []) -> ParseError:
-        """Creates a `ParseError` at the current position of the iterator."""
+    def get_error(self, msg: str | None = None) -> ParseError:
+        """Creates a `ParseError` without uncommitting and notes the position range from the checkpoint start to the current position."""
+        return ParseError(msg).append_pos_note(None, self)
+        # do not include self.notes, as it's supposed to be added by __exit__().
+
+    def get_fail(self, msg: str | None = None) -> ParseFailure:
+        """Creates a `ParseFailure` without uncommitting and notes the position range from the checkpoint start to the current position."""
+        return ParseFailure(msg, self.reversed_notes).append_pos_note(None, self)
+
+    def error(self, msg: str | None = None) -> ParseError:
+        """Uncommits and creates a `ParseError` and notes the position range from the checkpoint start to the current position."""
         self.committed = False
-        return ParseError(self.si.src, self.si.pos, msg, notes)
-        # do not prepend self.notes, as it's supposed to be prepended by __exit__().
+        return ParseError(msg).append_pos_note(None, self)
+        # do not include self.notes, as it's supposed to be added by __exit__().
 
-    def error_start(self, msg: str | None = None, notes: list[PosNote] = []) -> ParseError:
-        """Creates a `ParseError` at the starting position of the checkpoint."""
+    def fail(self, msg: str | None = None) -> ParseFailure:
+        """Uncommits and creates a `ParseFailure` and notes the position range from the checkpoint start to the current position."""
         self.committed = False
-        return ParseError(self.si.src, self.pos, msg, notes)
-        # do not prepend self.notes, as it's supposed to be prepended by __exit__().
+        return ParseFailure(msg, self.reversed_notes).append_pos_note(None, self)
 
-    def fail(self, msg: str | None = None, notes: list[PosNote] = []) -> ParseFailure:
-        """Uncommits and returns a `ParseFailure` positioned at the current position of the iterator."""
-        self.committed = False
-        return ParseFailure(self.si.src, self.si.pos, msg, notes).prepend_notes(self.notes)
+    @overload
+    def propagate(
+        self,
+        failure: ParseFailure,
+        /,
+    ) -> ParseFailure: ...
 
-    def fail_start(self, msg: str | None = None, notes: list[PosNote] = []) -> ParseFailure:
-        """Uncommits and returns a `ParseFailure` positioned at the starting position of the checkpoint."""
-        self.committed = False
-        return ParseFailure(self.si.src, self.pos, msg, notes).prepend_notes(self.notes)
+    @overload
+    def propagate(
+        self,
+        failure: ParseFailure,
+        msg: str | None,
+        /,
+    ) -> ParseFailure: ...
 
-    def propagate(self, failure: ParseFailure) -> ParseFailure:
+    @overload
+    def propagate(
+        self,
+        failure: ParseFailure,
+        msg: str | None,
+        /,
+        pos: Positioned,
+    ) -> ParseFailure: ...
+
+    @overload
+    def propagate(
+        self,
+        failure: ParseFailure,
+        msg: str | None,
+        /,
+        pos: int | tuple[int, int] | None = None,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> ParseFailure: ...
+
+    def propagate(
+        self,
+        failure: ParseFailure,
+        msg: str | None | NoValType = NoVal,
+        /,
+        pos: Positioned | int | tuple[int, int] | None | NoValType = NoVal,
+        src: str | None = None,
+        filename: str | None = None,
+    ) -> ParseFailure:
         """
         For failing using an existing `ParseFailure`.
         
         Uncommits, adds the current context's notes to the ParseError and returns it.
+
+        Can optionally add the current position as a note if you supply a message.
 
         Example:
         ```
@@ -1427,11 +1510,12 @@ class Checkpoint:
         ```
         """
         self.committed = False
-        return failure.prepend_notes(self.notes)
-
-    def add_notes_to_error(self, error: ParseError) -> None:
-        for note in reversed(self.notes):
-            error.append_existing_note(note)
+        if msg is NoVal:
+            return failure.append_existing(self.reversed_notes)
+        elif pos is NoVal:
+            return failure.append_pos_note(msg, self).append_existing(self.reversed_notes)
+        else:
+            return failure.append_pos_note(msg, pos, src, filename).append_existing(self.reversed_notes)
 
     def __enter__(self) -> Self:
         return self
@@ -1451,7 +1535,7 @@ class Checkpoint:
             self.rollback_if_uncommited()
         else:
             if isinstance(exc, ParseError):
-                self.add_notes_to_error(exc)
+                exc.notes += self.reversed_notes
             self.rollback()
         return False
     
