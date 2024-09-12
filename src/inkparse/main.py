@@ -3,7 +3,7 @@ The implementations of the main classes.
 """
 
 from __future__ import annotations
-from typing import overload, Any, Self, Literal, TypeVar, Generic, SupportsIndex, Final, Callable, Sequence, Protocol, Never
+from typing import overload, Any, Self, Literal, TypeVar, Generic, SupportsIndex, Final, Callable, Sequence, Protocol, Never, Container
 from types import TracebackType
 
 # from contextlib import contextmanager
@@ -29,6 +29,10 @@ __all__ = [
     "regex",
     "ws0",
     "ws1",
+    "s0",
+    "s1",
+    "nl0",
+    "nl1",
     "has_chars",
     "take",
     "is_eof",
@@ -60,6 +64,9 @@ _TokenTypeT = TypeVar("_TokenTypeT", bound=str|None)
 _DataCovT = TypeVar("_DataCovT", covariant=True)
 _TokenTypeCovT = TypeVar("_TokenTypeCovT", bound=str|None, covariant=True)
 
+
+class _GuardCheckFunction(Protocol[_T]):
+    def __call__(self, value: _T, condition: bool | None = None) -> _T: ...
 
 class NoValType(enum.Enum):
     NoVal = 0
@@ -611,14 +618,26 @@ class ParseFailureBase:
 
     def error(self) -> ParseError:
         """Converts this to a ParseError."""
+        if isinstance(self, ParseError):
+            return self
         return ParseError(self.msg, self.notes)
 
     def failure(self) -> ParseFailure:
         """Converts this to a ParseFailure."""
+        if isinstance(self, ParseFailure):
+            return self
         return ParseFailure(self.msg, self.notes)
 
     def __bool__(self) -> Literal[False]:
         return False
+    
+    def unwrap(self) -> Never:
+        """
+        Raises this as a `ParseError`.
+
+        For duck typing with `Token` and `Result`.
+        """
+        raise self.error()
 
 class ParseFailure(ParseFailureBase):
     pass
@@ -722,6 +741,14 @@ class Token(Generic[_TokenTypeCovT]):
     def __bool__(self) -> Literal[True]:
         return True
     
+    def unwrap(self) -> Self:
+        """
+        Returns self.
+
+        For duck typing with `ParseFailure`.
+        """
+        return self
+    
     def __eq__(self, other: object) -> bool:
         if isinstance(other, tuple):
             return self.pos == other
@@ -762,7 +789,7 @@ class Token(Generic[_TokenTypeCovT]):
         )
 
 # Positioned compatible
-class Result(Token, Generic[_DataCovT, _TokenTypeCovT]):
+class Result(Token[_TokenTypeCovT], Generic[_DataCovT, _TokenTypeCovT]):
     """
     When returned from a parser function, indicates that it has succeeded. Can also contain data.
 
@@ -865,6 +892,16 @@ class StringIterator:
         """Whether there are any characters left to parse. The opposite of `is_eof()`"""
         return self.pos < len(self.src)
 
+    def __iadd__(self, add: int) -> Self:
+        """Moves the iterator."""
+        self.pos += add
+        return self
+
+    def __isub__(self, sub: int) -> Self:
+        """Moves the iterator."""
+        self.pos -= sub
+        return self
+
     def peek(self, amount: int) -> str | None:
         """
         Retrieves the specified amount of characters without consuming.
@@ -886,6 +923,11 @@ class StringIterator:
         start_pos = self.pos
         self.pos += amount
         return self.src[start_pos:self.pos]
+    
+    def __iter__(self) -> Iterator[str]:
+        while self.pos < len(self.src):
+            self.pos += 1
+            yield self.src[self.pos-1]
     
     def checkpoint(self, *, note: str | None = None) -> Checkpoint:
         """
@@ -911,18 +953,25 @@ class StringIterator:
         """Saves the current position as a `Savepoint` and returns it."""
         return Savepoint(self)
 
-    def guard(self, value: _T, condition: bool | None = None) -> _T:
+    @property
+    def attempt(self) -> _GuardCheckFunction[_T]:
         """
-        Same as `si.save().guard(...)` but doesn't actually create a `Savepoint`.
+        Saves the position, and goes back to that position if the `condition` parameter is `None` and the `value` is falsy, or the `condition` parameter is false.
+
+        Similar to `si.save().guard(...)` but doesn't actually create a `Savepoint`.
+
+        Implemented as a property. The position is stored when the property is first accessed.
         """
         pos = self.pos
-        if condition is None:
-            if not value:
-                self.pos = pos
-        else:
-            if not condition:
-                self.pos = pos
-        return value
+        def checker(value: _T, condition: bool | None = None) -> _T:
+            if condition is None:
+                if not value:
+                    self.pos = pos
+            else:
+                if not condition:
+                    self.pos = pos
+            return value
+        return checker
     
     @overload
     def get_token(self) -> Token[None]: ...
@@ -956,85 +1005,119 @@ class StringIterator:
     def get_fail(self, msg: str | None = None) -> ParseFailure:
         """Creates a `ParseFailure` and notes the current position."""
         return ParseFailure(msg).append_pos_note(None, self)
-    
-    def inverted_guard(self, value: _T, condition: bool | None = None) -> _T:
-        """
-        Like `guard()` but rolls back if it's true instead.
-        """
-        pos = self.pos
-        if condition is None:
-            if value:
-                self.pos = pos
-        else:
-            if condition:
-                self.pos = pos
-        return value
 
-    def character(self, value: str) -> bool:
+    def char(self, value: str) -> str | None:
         """
         Attempts to match the given character. Case sensitive.
 
         Advances the position if it matched.
 
-        Returns a bool indicating whether or not the character was matched.
+        Returns the matched character if it matched, otherwise returns `None`.
         """
         if not self.has_chars(1):
-            return False
+            return None
         if self.src[self.pos] == value:
             self.pos += 1
-            return True
+            return value
         else:
-            return False
+            return None
 
-    def character_anycase(self, value: str) -> bool:
+    def char_anycase(self, value: str) -> str | None:
         """
         Attempts to match the given character. Non case sensitive.
 
         Advances the position if it matched.
 
-        Returns a bool indicating whether or not the character was matched.
+        Returns the matched character if it matched, otherwise returns `None`.
         """
         if not self.has_chars(1):
-            return False
-        if self.src[self.pos].lower() == value.lower():
+            return None
+        char = self.src[self.pos]
+        if char.lower() == value.lower():
             self.pos += 1
-            return True
+            return char
+        else:
+            return None
+
+    def oneof_chars(self, chars: str) -> str | None:
+        """
+        Attempts to match one of the given characters. Case sensitive.
+
+        Advances the position if it matched.
+
+        Returns the matched character if it matched, otherwise returns `None`.
+        """
+        if not self.has_chars(1):
+            return None
+        char = self.src[self.pos]
+        if char in chars:
+            self.pos += 1
+            return char
+        else:
+            return None
+
+    def oneof_chars_anycase(self, chars: str) -> str | None:
+        """
+        Attempts to match one of the given characters. Non case sensitive.
+
+        Advances the position if it matched.
+
+        Returns the matched character if it matched, otherwise returns `None`.
+        """
+        if not self.has_chars(1):
+            return None
+        char = self.src[self.pos]
+        if char.lower() in chars.lower():
+            self.pos += 1
+            return char
+        else:
+            return None
+
+    def __eq__(self, value: object) -> bool:
+        """Same as `literal(...)`."""
+        if isinstance(value, str):
+            return bool(self.literal(value))
+        elif isinstance(value, (list, tuple)):
+            return bool(self.oneof_literals(value))
+        elif isinstance(value, re.Pattern):
+            return bool(self.regex(value))
         else:
             return False
 
-    def literal(self, value: str) -> bool:
+    def literal(self, value: str) -> str | None:
         """
         Attempts to match the given string. Case sensitive.
 
         Advances the position if it matched.
 
-        Returns a bool indicating whether or not the string was matched.
+        Returns the matched string if it matched, otherwise returns `None`.
         """
         if not self.has_chars(len(value)):
-            return False
+            return None
         if self.src[self.pos:self.pos+len(value)] == value:
             self.pos += len(value)
-            return True
+            return value
         else:
-            return False
+            return None
 
-    def literal_anycase(self, value: str) -> bool:
+    def literal_anycase(self, value: str) -> str | None:
         """
         Attempts to match the given string. Non case sensitive.
 
         Advances the position if it matched.
 
-        Returns a bool indicating whether or not the string was matched.
+        Returns the matched string if it matched, otherwise returns `None`.
         """
         if not self.has_chars(len(value)):
-            return False
-        if self.src[self.pos:self.pos+len(value)].lower() == value.lower():
+            return None
+        s = self.src[self.pos:self.pos+len(value)]
+        if s.lower() == value.lower():
             self.pos += len(value)
-            return True
+            return s
         else:
-            return False
+            return None
 
-    def oneof_literals(self, values: Sequence[str]) -> str | None:
+    def oneof_literals(self, values: Iterable[str]) -> str | None:
         """
         Attempts to match any of the given strings, starting from the first. Case sensitive.
 
@@ -1047,7 +1130,7 @@ class StringIterator:
                 return pattern
         return None
 
-    def oneof_literals_anycase(self, values: Sequence[str]) -> str | None:
+    def oneof_literals_anycase(self, values: Iterable[str]) -> str | None:
         """
         Attempts to match any of the given strings, starting from the first. Non case sensitive.
 
@@ -1079,6 +1162,32 @@ class StringIterator:
     def ws1(self) -> bool:
         """Matches one or more whitespaces. Returns a bool indicating whether or not the first whitespace was found."""
         if self.peek(1) not in constants.WHITESPACES:
+            return False
+        self.pos += 1
+        self.ws0()
+        return True
+    
+    def s0(self) -> None:
+        """Matches zero or more spaces and tabs."""
+        while self.peek(1) in constants.SPACES:
+            self.pos += 1
+    
+    def s1(self) -> bool:
+        """Matches one or more spaces and tabs. Returns a bool indicating whether or not the first one was found."""
+        if self.peek(1) not in constants.SPACES:
+            return False
+        self.pos += 1
+        self.ws0()
+        return True
+    
+    def nl0(self) -> None:
+        """Matches zero or more newline characters."""
+        while self.peek(1) in constants.NEWLINE:
+            self.pos += 1
+    
+    def nl1(self) -> bool:
+        """Matches one or more newline characters. Returns a bool indicating whether or not the first one was found."""
+        if self.peek(1) not in constants.NEWLINE:
             return False
         self.pos += 1
         self.ws0()
@@ -1646,6 +1755,24 @@ def ws0(si: StringIterator) -> bool:
 def ws1(si: StringIterator) -> bool:
     """A pre-defined BasicParser (not a factory) for `StringIterator.ws1()`."""
     return si.ws1()
+
+def s0(si: StringIterator) -> bool:
+    """A pre-defined BasicParser (not a factory) for `StringIterator.s0()`."""
+    si.s0()
+    return True
+
+def s1(si: StringIterator) -> bool:
+    """A pre-defined BasicParser (not a factory) for `StringIterator.s1()`."""
+    return si.s1()
+
+def nl0(si: StringIterator) -> bool:
+    """A pre-defined BasicParser (not a factory) for `StringIterator.nl0()`."""
+    si.nl0()
+    return True
+
+def nl1(si: StringIterator) -> bool:
+    """A pre-defined BasicParser (not a factory) for `StringIterator.nl1()`."""
+    return si.nl1()
 
 def has_chars(amount: int) -> BasicParser:
     """BasicParser factory for `StringIterator.has_chars(amount)`."""

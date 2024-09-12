@@ -3,7 +3,7 @@ General purpose parsers.
 """
 
 from __future__ import annotations
-from typing import Callable, Any, Literal, LiteralString
+from typing import Callable, Any, Literal, LiteralString, Container
 
 from collections.abc import Sequence
 
@@ -20,6 +20,23 @@ __all__ = [
     "unsigned_integer",
     "float_literal",
 ]
+
+# identifier
+
+def identifier(
+    si: StringIterator,
+    chars: Container[str] = constants.IDENTIFIER,
+) -> Result[str, Literal["identifier"]] | ParseFailure:
+    """
+    Matches an identifier consisting of the given characters. (`a-z` `A-Z` `0-9` `_` by default)
+    """
+    with si() as c:
+        if si.peek(1) not in chars:
+            return c.fail("Expected an identifier.")
+        si += 1
+        while si.peek(1) in chars:
+            si += 1
+        return c.result(c.get_string(), "identifier")
 
 # quoted string
 
@@ -231,7 +248,7 @@ def integer_literal(
     si: StringIterator,
 ) -> Result[int, Literal["integer_literal"]] | ParseFailure:
     with si() as c:
-        si.character("-") # optional
+        si.char("-") # optional
         if _integer(si):
             return c.result(int(c.get_string(), base=0), "integer_literal")
         else:
@@ -253,7 +270,7 @@ def integer(
     if not 2 <= base <= 36:
         raise ValueError("Invalid base.")
     with si() as c:
-        si.character("-") # optional
+        si.char("-") # optional
         usable_digits = constants.DIGITS36[:base]
         if si.peek(1) in usable_digits:
             si.pos += 1
@@ -292,7 +309,7 @@ def float_literal(
     si: StringIterator,
 ) -> Result[int, Literal["float_literal"]] | ParseFailure:
     with si() as c:
-        si.character("-") # optional
+        si.char("-") # optional
         if _floatnumber(si):
             return c.result(int(c.get_string(), base=0), "float_literal")
         else:
