@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "inkparse"
-version = "0.3.0"
+version = "0.3.1"
 authors = [
 	{ name="MoonMountain2k", email="moonmountain2k@gmail.com" },
 ]
-description = "Functions and classes for simpler text parsing."
+description = "Functions and classes for recursive descent parsing."
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [

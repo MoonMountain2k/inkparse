@@ -29,25 +29,16 @@ else:
 
 ---
 
-String positions are between characters and start from 0.
+String positions are *between* characters and start from 0. (The same as how python string slices work.)
 
-(Examples of string positions include function arguments that have "pos" or "position" in their name.)
-
-In a string: `"abcdef"`
+In the string: `"abcdef"`
 ```
  a b c d e f
 ^ ^ ^ ^ ^ ^ ^
 0 1 2 3 4 5 6
 ```
 
-However, line numbers and column numbers start from 1.
-
-(Examples of line numbers and column numbers include function arguments that have "line" or "col" / "column" in their name respectively.)
-
-The first line in a string is line 1.
-
-The space before the first character (the rightmost position a text caret can be) is column 1.
-```
+(Line numbers and column numbers shown in error messages start from 1 instead of 0.)
 """
 
 import inkparse.constants as constants

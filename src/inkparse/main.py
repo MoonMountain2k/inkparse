@@ -65,7 +65,7 @@ _DataCovT = TypeVar("_DataCovT", covariant=True)
 _TokenTypeCovT = TypeVar("_TokenTypeCovT", bound=str|None, covariant=True)
 
 
-class _GuardCheckFunction(Protocol[_T]):
+class _AttemptRollbackFunction(Protocol):
     def __call__(self, value: _T, condition: bool | None = None) -> _T: ...
 
 class NoValType(enum.Enum):
@@ -272,8 +272,9 @@ class PosNote:
         if msg is None:
             msg = self.msg
         if msg is None:
-            msg = "Unknown error."
-        return msg + "\n" + self.pos_to_multiline_str(terminal_width, pos=pos, src=src, filename=filename)
+            return self.pos_to_multiline_str(terminal_width, pos=pos, src=src, filename=filename)
+        else:
+            return msg + "\n" + self.pos_to_multiline_str(terminal_width, pos=pos, src=src, filename=filename)
 
     @staticmethod
     def _create_preview_single(
@@ -935,7 +936,7 @@ class StringIterator:
         
         If you need another checkpoint within the checkpoint, call `Checkpoint.sub_checkpoint()` on the returned checkpoint.
         
-        Same as `Checkpoint.__call__()`
+        Same as `StringIterator.__call__(...)`
         """
         return Checkpoint(self, note=note)
     
@@ -945,7 +946,7 @@ class StringIterator:
         
         If you need another checkpoint within the checkpoint, call `Checkpoint.sub_checkpoint()` on the returned checkpoint.
         
-        Same as `Checkpoint.checkpoint()`
+        Same as `StringIterator.checkpoint(...)`
         """
         return Checkpoint(self, note=note)
 
@@ -954,11 +955,11 @@ class StringIterator:
         return Savepoint(self)
 
     @property
-    def attempt(self) -> _GuardCheckFunction[_T]:
+    def attempt(self) -> _AttemptRollbackFunction:
         """
         Saves the position, and goes back to that position if the `condition` parameter is `None` and the `value` is falsy, or the `condition` parameter is false.
 
-        Similar to `si.save().guard(...)` but doesn't actually create a `Savepoint`.
+        Similar to `si.save().attempt(...)` but doesn't actually create a `Savepoint`.
 
         Implemented as a property. The position is stored when the property is first accessed.
         """
@@ -999,12 +1000,12 @@ class StringIterator:
 
     def get_error(self, msg: str | None = None) -> ParseError:
         """Creates a `ParseError` and notes the current position."""
-        return ParseError(msg).append_pos_note(None, self)
+        return ParseError(msg).append_pos_note(msg, self)
         # do not include self.notes, as it's supposed to be added by __exit__().
 
     def get_fail(self, msg: str | None = None) -> ParseFailure:
         """Creates a `ParseFailure` and notes the current position."""
-        return ParseFailure(msg).append_pos_note(None, self)
+        return ParseFailure(msg).append_pos_note(msg, self)
 
     def char(self, value: str) -> str | None:
         """
@@ -1331,25 +1332,18 @@ class CheckpointBase:
 
     def get_error(self, msg: str | None = None) -> ParseError:
         """Creates a `ParseError` and notes the position range from the checkpoint start to the current position."""
-        return ParseError(msg).append_pos_note(None, self)
+        return ParseError(msg).append_pos_note(msg, self)
         # do not include self.notes, as it's supposed to be added by __exit__().
 
     def get_fail(self, msg: str | None = None) -> ParseFailure:
         """Creates a `ParseFailure` and notes the position range from the checkpoint start to the current position."""
-        return ParseFailure(msg).append_pos_note(None, self)
+        return ParseFailure(msg).append_pos_note(msg, self)
     
-    def guard(self, value: _T, condition: bool | None = None) -> _T:
+    def attempt(self, value: _T, condition: bool | None = None) -> _T:
         """
         Rolls back the checkpoint if the `condition` parameter is `None` and the `value` is falsy, or the `condition` parameter is false.
 
         Returns the `value` as-is.
-
-        Common usage method:
-
-        ```
-        si.save().guard(si.literal("test"))
-        si.guard(si.literal("test"))
-        ```
         """
         if condition is None:
             if not value:
@@ -1359,9 +1353,9 @@ class CheckpointBase:
                 self.si.pos = self.start_pos
         return value
     
-    def inverted_guard(self, value: _T, condition: bool | None = None) -> _T:
+    def inverted_attempt(self, value: _T, condition: bool | None = None) -> _T:
         """
-        Like `guard()` but rolls back if it's true instead.
+        Like `attempt()` but rolls back if it's true instead.
         """
         if condition is None:
             if value:
@@ -1537,24 +1531,24 @@ class Checkpoint(CheckpointBase):
         return Result(data, token_type, self, subtokens=self.subtokens)
 
     def get_error(self, msg: str | None = None) -> ParseError:
-        """Creates a `ParseError` without uncommitting and notes the position range from the checkpoint start to the current position."""
-        return ParseError(msg).append_pos_note(None, self)
+        """Creates a `ParseError` without uncommitting and notes the current position."""
+        return ParseError(msg).append_pos_note(msg, self)
         # do not include self.notes, as it's supposed to be added by __exit__().
 
     def get_fail(self, msg: str | None = None) -> ParseFailure:
-        """Creates a `ParseFailure` without uncommitting and notes the position range from the checkpoint start to the current position."""
-        return ParseFailure(msg, self.reversed_notes).append_pos_note(None, self)
+        """Creates a `ParseFailure` without uncommitting and notes the current position."""
+        return ParseFailure(msg, self.reversed_notes).append_pos_note(msg, self)
 
     def error(self, msg: str | None = None) -> ParseError:
-        """Uncommits and creates a `ParseError` and notes the position range from the checkpoint start to the current position."""
+        """Uncommits and creates a `ParseError` and notes the current position."""
         self.committed = False
-        return ParseError(msg).append_pos_note(None, self)
+        return ParseError(msg).append_pos_note(msg, self)
         # do not include self.notes, as it's supposed to be added by __exit__().
 
     def fail(self, msg: str | None = None) -> ParseFailure:
-        """Uncommits and creates a `ParseFailure` and notes the position range from the checkpoint start to the current position."""
+        """Uncommits and creates a `ParseFailure` and notes the current position."""
         self.committed = False
-        return ParseFailure(msg, self.reversed_notes).append_pos_note(None, self)
+        return ParseFailure(msg, self.reversed_notes).append_pos_note(msg, self)
 
     @overload
     def propagate(
@@ -1932,7 +1926,7 @@ def repeat0(*parsers: FactoryParameter) -> BasicParser:
     else:
         new_parsers = convert_factory_parameters(parsers)
         def inner(si: StringIterator) -> bool:
-            while si.save().guard(all(parser(si) for parser in new_parsers)):
+            while si.attempt(all(parser(si) for parser in new_parsers)):
                 pass
             return True
         return inner
@@ -1959,9 +1953,9 @@ def repeat1(*parsers: FactoryParameter) -> BasicParser:
     else:
         new_parsers = convert_factory_parameters(parsers)
         def inner(si: StringIterator) -> bool:
-            if not si.save().guard(all(parser(si) for parser in new_parsers)):
+            if not si.attempt(all(parser(si) for parser in new_parsers)):
                 return False
-            while si.save().guard(all(parser(si) for parser in new_parsers)):
+            while si.attempt(all(parser(si) for parser in new_parsers)):
                 pass
             return True
         return inner
