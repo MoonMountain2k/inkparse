@@ -44,4 +44,3 @@ In the string: `"abcdef"`
 ```
 
 (Line numbers and column numbers shown in error messages start from 1 instead of 0.)
-```
