@@ -527,10 +527,10 @@ class ParseFailureBase:
     def __init__(
         self,
         msg: str | None = None,
-        notes: list[PosNote] = [],
+        notes: list[PosNote] | None = None,
     ) -> None:
         self.msg = msg
-        self.notes: list[PosNote] = notes
+        self.notes: list[PosNote] = [] if notes is None else notes
 
     def append_existing(self, note: PosNote | list[PosNote]) -> Self:
         """Appends a note or notes to the bottom of the notes."""
@@ -570,7 +570,7 @@ class ParseFailureBase:
     def copy(
         self,
         msg: str | None = None,
-        notes: list[PosNote] = [],
+        notes: list[PosNote] | None = None,
     ) -> Self:
         return type(self)(msg if msg is not None else self.msg, notes if notes is not None else copy(self.notes))
 
@@ -653,7 +653,7 @@ class ParseError(ParseFailureBase, Exception):
     def __init__(
         self,
         msg: str | None = None,
-        notes: list[PosNote] = [],
+        notes: list[PosNote] | None = None,
     ) -> None:
         if msg is None:
             Exception.__init__(self)
@@ -697,7 +697,7 @@ class Token(Generic[_TokenTypeCovT]):
         token_type: _TokenTypeCovT,
         pos: Positioned,
         *,
-        subtokens: list[Token] = [],
+        subtokens: list[Token] | None = None,
     ) -> None: ...
 
     @overload
@@ -707,7 +707,7 @@ class Token(Generic[_TokenTypeCovT]):
         pos: Positioned | int | tuple[int, int] | None = None,
         src: str | None = None,
         filename: str | None = None,
-        subtokens: list[Token] = [],
+        subtokens: list[Token] | None = None,
     ) -> None: ...
 
     def __init__(
@@ -716,13 +716,13 @@ class Token(Generic[_TokenTypeCovT]):
         pos: Positioned | int | tuple[int, int] | None = None,
         src: str | None = None,
         filename: str | None = None,
-        subtokens: list[Token] = [],
+        subtokens: list[Token] | None = None,
     ) -> None:
         """
         `token_type` can either be a string or None.
         """
         self.token_type: Final[_TokenTypeCovT] = token_type
-        self.subtokens: list[Token] = subtokens
+        self.subtokens: list[Token] = [] if subtokens is None else subtokens
         self.pos: int | tuple[int, int] | None
         self.src: str | None
         self.filename: str | None
@@ -813,7 +813,7 @@ class Result(Token[_TokenTypeCovT], Generic[_DataCovT, _TokenTypeCovT]):
         token_type: _TokenTypeCovT,
         pos: Positioned,
         *,
-        subtokens: list[Token] = [],
+        subtokens: list[Token] | None = None,
     ) -> None: ...
 
     @overload
@@ -824,7 +824,7 @@ class Result(Token[_TokenTypeCovT], Generic[_DataCovT, _TokenTypeCovT]):
         pos: Positioned | int | tuple[int, int] | None = None,
         src: str | None = None,
         filename: str | None = None,
-        subtokens: list[Token] = [],
+        subtokens: list[Token] | None = None,
     ) -> None: ...
 
     def __init__(
@@ -834,7 +834,7 @@ class Result(Token[_TokenTypeCovT], Generic[_DataCovT, _TokenTypeCovT]):
         pos: Positioned | int | tuple[int, int] | None = None,
         src: str | None = None,
         filename: str | None = None,
-        subtokens: list[Token] = [],
+        subtokens: list[Token] | None = None,
     ) -> None:
         super().__init__(token_type, pos, src, filename, subtokens)
         self.data: _DataCovT = data
